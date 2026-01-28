@@ -12,8 +12,10 @@ import (
 	"claude-status/internal/config"
 	"claude-status/internal/installer"
 	"claude-status/internal/logger"
+	"claude-status/internal/monitor"
 	"claude-status/internal/ssh"
 	"claude-status/internal/tray"
+	"claude-status/internal/wsl"
 )
 
 // Run 运行应用
@@ -187,29 +189,35 @@ func connectionManager(cfg *config.Config, trayApp *tray.App, configPath string,
 // runConnection 运行一次连接，返回 (是否继续, 新选择的服务器)
 func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) (bool, *config.ServerConfig) {
 	// 获取显示名称
-	displayName := cfg.Server.Name
-	if displayName == "" {
-		displayName = cfg.Server.Host
-	}
+	displayName := getDisplayName(cfg)
 
-	logger.Info("runConnection: connecting to %s@%s:%d", cfg.Server.User, cfg.Server.Host, cfg.Server.Port)
+	logger.Info("runConnection: mode=%s, display=%s", getMode(cfg), displayName)
 	trayApp.SetConnecting(displayName)
 
-	// 创建 SSH 客户端
-	sshClient := ssh.NewClient(cfg)
+	// 创建客户端（SSH 或 WSL）
+	var client monitor.Client
+	var inst monitor.Installer
+
+	if cfg.WSL.Enabled {
+		client = wsl.NewClient(cfg)
+		inst = wsl.NewInstaller(cfg)
+	} else {
+		client = ssh.NewClient(cfg)
+		inst = installer.NewInstaller(cfg)
+	}
 
 	// 连接
-	if err := sshClient.Connect(); err != nil {
-		logger.Error("SSH connect failed: %v", err)
+	if err := client.Connect(); err != nil {
+		logger.Error("Connect failed: %v", err)
 		trayApp.SetError("connection_failed", err.Error())
 		return true, nil // 继续等待重连
 	}
-	defer sshClient.Close()
-	logger.Info("SSH connected successfully")
+	defer client.Close()
+	logger.Info("Connected successfully")
 
 	// 启动监听
-	if err := sshClient.Start(); err != nil {
-		logger.Error("SSH start failed: %v", err)
+	if err := client.Start(); err != nil {
+		logger.Error("Start failed: %v", err)
 		errMsg := err.Error()
 
 		// 检测是否是服务端未配置，尝试自动安装
@@ -217,7 +225,6 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 			logger.Info("服务端未配置，尝试自动安装...")
 			trayApp.SetConnecting("正在安装服务端...")
 
-			inst := installer.NewInstaller(cfg)
 			if err := inst.Connect(); err != nil {
 				logger.Error("安装器连接失败: %v", err)
 				trayApp.SetError("install_failed", "安装失败: "+err.Error())
@@ -242,15 +249,19 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 			inst.Close()
 
 			logger.Info("服务端安装完成，重新启动监听...")
-			// 重新创建 SSH 客户端并启动
-			sshClient.Close()
-			sshClient = ssh.NewClient(cfg)
-			if err := sshClient.Connect(); err != nil {
+			// 重新创建客户端并启动
+			client.Close()
+			if cfg.WSL.Enabled {
+				client = wsl.NewClient(cfg)
+			} else {
+				client = ssh.NewClient(cfg)
+			}
+			if err := client.Connect(); err != nil {
 				logger.Error("重新连接失败: %v", err)
 				trayApp.SetError("connection_failed", err.Error())
 				return true, nil
 			}
-			if err := sshClient.Start(); err != nil {
+			if err := client.Start(); err != nil {
 				logger.Error("重新启动失败: %v", err)
 				trayApp.SetError("session_error", err.Error())
 				return true, nil
@@ -260,16 +271,16 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 			return true, nil
 		}
 	}
-	logger.Info("SSH session started")
+	logger.Info("Session started")
 	trayApp.SetConnected(true, displayName)
 
 	// 主循环
 	for {
 		select {
-		case statuses := <-sshClient.StatusChan():
+		case statuses := <-client.StatusChan():
 			trayApp.UpdateStatus(statuses)
 
-		case err := <-sshClient.ErrorChan():
+		case err := <-client.ErrorChan():
 			errMsg := err.Error()
 			if isNotConfiguredError(errMsg) {
 				trayApp.SetError("not_configured", errMsg)
@@ -278,7 +289,7 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 			}
 			return true, nil
 
-		case <-sshClient.Done():
+		case <-client.Done():
 			trayApp.SetError("session_error", "连接已断开")
 			return true, nil
 
@@ -297,6 +308,28 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 			return false, nil
 		}
 	}
+}
+
+// getDisplayName 获取显示名称
+func getDisplayName(cfg *config.Config) string {
+	if cfg.WSL.Enabled {
+		if cfg.WSL.Distro != "" {
+			return "WSL: " + cfg.WSL.Distro
+		}
+		return "WSL"
+	}
+	if cfg.Server.Name != "" {
+		return cfg.Server.Name
+	}
+	return cfg.Server.Host
+}
+
+// getMode 获取模式名称
+func getMode(cfg *config.Config) string {
+	if cfg.WSL.Enabled {
+		return "WSL"
+	}
+	return "SSH"
 }
 
 // isNotConfiguredError 检测是否是服务端未配置的错误

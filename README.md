@@ -17,6 +17,7 @@ Windows 系统托盘工具，通过 SSH 实时监控 Linux 服务器上 Claude C
 - **实时状态监控**：系统托盘图标动态显示 Claude Code 运行状态
 - **多项目支持**：同时监控多个 Claude Code 实例
 - **SSH 安全连接**：复用现有 `~/.ssh/config` 配置
+- **WSL 支持**：可监控本地 WSL 中运行的 Claude Code
 - **自动安装**：首次连接自动安装服务端脚本，无需手动配置
 - **事件驱动**：基于 Claude Code Hook，低延迟更新
 - **自动清理**：会话结束后自动移除，支持超时清理
@@ -67,6 +68,23 @@ server:
 - 首次连接会**自动安装**服务端脚本并配置 Claude Code Hook
 - 图标会出现在系统托盘
 
+### WSL 模式（可选）
+
+如果 Claude Code 运行在本地 WSL 中，可使用 WSL 模式：
+
+**1. WSL 内安装依赖：**
+```bash
+sudo apt install inotify-tools jq
+```
+
+**2. 创建配置文件** `config.yaml`：
+```yaml
+wsl:
+  enabled: true
+```
+
+**3. 运行** `claude-status.exe`，会自动安装并监控 WSL 中的 Claude Code
+
 ## 架构
 
 ```
@@ -99,6 +117,7 @@ server:
 
 ### 客户端配置 (config.yaml)
 
+**SSH 模式（连接远程服务器）：**
 ```yaml
 server:
   host: "example.com"      # SSH 服务器地址（必填）
@@ -110,6 +129,19 @@ server:
 debug: false
 
 # 状态超时（秒），超时的项目会从列表移除，0 禁用
+status_timeout: 300
+```
+
+**WSL 模式（监控本地 WSL）：**
+```yaml
+wsl:
+  enabled: true            # 启用 WSL 模式
+  distro: ""               # WSL 发行版名称（可选，空则使用默认发行版）
+
+# 调试模式
+debug: false
+
+# 状态超时（秒）
 status_timeout: 300
 ```
 

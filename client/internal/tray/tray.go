@@ -11,19 +11,19 @@ import (
 	"claude-status/assets/icons"
 	"claude-status/internal/config"
 	"claude-status/internal/logger"
-	"claude-status/internal/ssh"
+	"claude-status/internal/monitor"
 
 	"github.com/getlantern/systray"
 )
 
 // App 系统托盘应用
 type App struct {
-	statuses       []ssh.ProjectStatus
+	statuses       []monitor.ProjectStatus
 	servers        []config.ServerConfig
 	quitCh         chan struct{}
 	reconnectCh    chan struct{}
 	serverSelectCh chan config.ServerConfig
-	updateCh       chan []ssh.ProjectStatus
+	updateCh       chan []monitor.ProjectStatus
 	currentIcon    string
 	mStatus        *systray.MenuItem
 	mReconnect     *systray.MenuItem
@@ -49,12 +49,12 @@ type App struct {
 // NewApp 创建托盘应用
 func NewApp() *App {
 	return &App{
-		statuses:          make([]ssh.ProjectStatus, 0),
+		statuses:          make([]monitor.ProjectStatus, 0),
 		servers:           make([]config.ServerConfig, 0),
 		quitCh:            make(chan struct{}),
 		reconnectCh:       make(chan struct{}, 1),
 		serverSelectCh:    make(chan config.ServerConfig, 1),
-		updateCh:          make(chan []ssh.ProjectStatus, 10),
+		updateCh:          make(chan []monitor.ProjectStatus, 10),
 		currentIcon:       "",
 		isDarkMode:        IsDarkMode(),
 		animFrame:         0,
@@ -287,7 +287,7 @@ func (t *App) watchUpdates() {
 }
 
 // UpdateStatus 更新状态（外部调用）
-func (t *App) UpdateStatus(statuses []ssh.ProjectStatus) {
+func (t *App) UpdateStatus(statuses []monitor.ProjectStatus) {
 	select {
 	case t.updateCh <- statuses:
 	default:
@@ -300,11 +300,11 @@ func (t *App) UpdateStatus(statuses []ssh.ProjectStatus) {
 }
 
 // updateStatus 内部更新状态
-func (t *App) updateStatus(statuses []ssh.ProjectStatus) {
+func (t *App) updateStatus(statuses []monitor.ProjectStatus) {
 	now := time.Now().Unix()
 
 	// 过滤掉 stopped 状态和超时的实例，同时更新 working 开始时间
-	filtered := make([]ssh.ProjectStatus, 0, len(statuses))
+	filtered := make([]monitor.ProjectStatus, 0, len(statuses))
 	activeProjects := make(map[string]bool)
 
 	for _, s := range statuses {

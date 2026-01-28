@@ -12,8 +12,15 @@ import (
 // Config 应用配置
 type Config struct {
 	Server        ServerConfig `yaml:"server"`
+	WSL           WSLConfig    `yaml:"wsl,omitempty"`
 	Debug         bool         `yaml:"debug,omitempty"`
 	StatusTimeout int          `yaml:"status_timeout,omitempty"` // 状态超时（秒），默认 300，0 禁用
+}
+
+// WSLConfig WSL 配置
+type WSLConfig struct {
+	Enabled bool   `yaml:"enabled"`           // 是否使用 WSL 模式
+	Distro  string `yaml:"distro,omitempty"`  // WSL 发行版名称，空则使用默认
 }
 
 // ServerConfig SSH 服务器配置

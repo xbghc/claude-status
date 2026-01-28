@@ -10,31 +10,17 @@ import (
 
 	"claude-status/internal/config"
 	"claude-status/internal/logger"
+	"claude-status/internal/monitor"
 
 	"golang.org/x/crypto/ssh"
 )
-
-// ProjectStatus 单个项目的状态
-type ProjectStatus struct {
-	Project     string `json:"project"`
-	ProjectName string `json:"project_name"`
-	Status      string `json:"status"`
-	UpdatedAt   int64  `json:"updated_at"`
-}
-
-// StatusMessage 状态消息
-type StatusMessage struct {
-	Type    string          `json:"type"`
-	Data    []ProjectStatus `json:"data,omitempty"`
-	Message string          `json:"message,omitempty"`
-}
 
 // Client SSH 客户端
 type Client struct {
 	config   *config.Config
 	client   *ssh.Client
 	session  *ssh.Session
-	statusCh chan []ProjectStatus
+	statusCh chan []monitor.ProjectStatus
 	errorCh  chan error
 	done     chan struct{}
 }
@@ -43,7 +29,7 @@ type Client struct {
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
 		config:   cfg,
-		statusCh: make(chan []ProjectStatus, 10),
+		statusCh: make(chan []monitor.ProjectStatus, 10),
 		errorCh:  make(chan error, 1),
 		done:     make(chan struct{}),
 	}
@@ -149,7 +135,7 @@ func (c *Client) readOutput(r io.Reader) {
 			continue
 		}
 
-		var msg StatusMessage
+		var msg monitor.StatusMessage
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			logger.Error("readOutput: JSON parse error: %v, line: %s", err, line)
 			continue
@@ -185,7 +171,7 @@ func (c *Client) readOutput(r io.Reader) {
 }
 
 // StatusChan 返回状态 channel
-func (c *Client) StatusChan() <-chan []ProjectStatus {
+func (c *Client) StatusChan() <-chan []monitor.ProjectStatus {
 	return c.statusCh
 }
 

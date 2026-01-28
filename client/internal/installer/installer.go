@@ -16,13 +16,13 @@ import (
 )
 
 //go:embed scripts/status-hook.sh
-var statusHookScript string
+var StatusHookScript string
 
 //go:embed scripts/monitor.sh
-var monitorScript string
+var MonitorScript string
 
 //go:embed scripts/install-remote.sh
-var installRemoteScript string
+var InstallRemoteScript string
 
 // Installer 远程安装器
 type Installer struct {
@@ -104,11 +104,11 @@ func (i *Installer) Install() error {
 	}
 
 	// 2. 上传脚本
-	if err := i.uploadFile("~/.claude-status/hooks/status-hook.sh", statusHookScript); err != nil {
+	if err := i.uploadFile("~/.claude-status/hooks/status-hook.sh", StatusHookScript); err != nil {
 		return fmt.Errorf("上传 status-hook.sh 失败: %w", err)
 	}
 
-	if err := i.uploadFile("~/.claude-status/monitor.sh", monitorScript); err != nil {
+	if err := i.uploadFile("~/.claude-status/monitor.sh", MonitorScript); err != nil {
 		return fmt.Errorf("上传 monitor.sh 失败: %w", err)
 	}
 
@@ -177,7 +177,7 @@ func (i *Installer) configureHooks() error {
 
 	go func() {
 		defer stdin.Close()
-		io.WriteString(stdin, installRemoteScript)
+		io.WriteString(stdin, InstallRemoteScript)
 	}()
 
 	return session.Run("bash -s")
