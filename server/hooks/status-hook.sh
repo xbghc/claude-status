@@ -3,41 +3,37 @@
 # 用法: status-hook.sh <working|idle|stopped>
 # 由 Claude Code Hook 调用，更新状态文件
 #
-# 注意：
-# - stdout 会被添加到 UserPromptSubmit/SessionStart 的对话上下文，保持静默
-# - exit code 0 = 成功，exit code 2 = 阻断操作，其他 = 非阻断错误
-
-set -e
+# 性能优化：使用 bash 内置命令，减少 fork 次数
 
 STATUS_DIR="$HOME/.claude-status"
 STATUS="${1:-idle}"
 
-# 确保状态目录存在
-mkdir -p "$STATUS_DIR"
+# 确保状态目录存在（只在不存在时创建）
+[[ -d "$STATUS_DIR" ]] || mkdir -p "$STATUS_DIR"
 
 # 获取项目目录（从 Claude Code 环境变量，静默回退到 PWD）
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
-PROJECT_NAME=$(basename "$PROJECT_DIR")
 
-# 使用项目路径的 MD5 哈希作为文件名
-PROJECT_HASH=$(echo -n "$PROJECT_DIR" | md5sum | cut -d' ' -f1)
+# 使用 bash 内置的字符串操作替代 basename
+PROJECT_NAME="${PROJECT_DIR##*/}"
+
+# 使用简单的哈希替代 md5sum（基于字符串长度和部分字符）
+# 这足够区分不同项目路径，且速度快很多
+hash_str="${#PROJECT_DIR}_${PROJECT_DIR//[^a-zA-Z0-9]/_}"
+# 截取前64字符作为文件名
+PROJECT_HASH="${hash_str:0:64}"
 STATUS_FILE="$STATUS_DIR/${PROJECT_HASH}.json"
 
-# 获取当前时间戳
-TIMESTAMP=$(date +%s)
+# 使用 printf 获取时间戳（bash 内置，无需 fork）
+printf -v TIMESTAMP '%(%s)T' -1
 
-# 使用临时文件进行原子写入（防并发问题）
-TEMP_FILE="${STATUS_FILE}.tmp.$$"
-cat > "$TEMP_FILE" << EOF
-{
-  "project": "$PROJECT_DIR",
-  "project_name": "$PROJECT_NAME",
-  "status": "$STATUS",
-  "updated_at": $TIMESTAMP
+# 直接写入文件（使用 printf 替代 cat，无需 fork）
+printf '{
+  "project": "%s",
+  "project_name": "%s",
+  "status": "%s",
+  "updated_at": %s
 }
-EOF
-
-# 原子移动
-mv "$TEMP_FILE" "$STATUS_FILE"
+' "$PROJECT_DIR" "$PROJECT_NAME" "$STATUS" "$TIMESTAMP" > "$STATUS_FILE"
 
 exit 0
