@@ -17,6 +17,7 @@ Windows 系统托盘工具，通过 SSH 实时监控 Linux 服务器上 Claude C
 - **实时状态监控**：系统托盘图标动态显示 Claude Code 运行状态
 - **多项目支持**：同时监控多个 Claude Code 实例
 - **SSH 安全连接**：复用现有 `~/.ssh/config` 配置
+- **自动安装**：首次连接自动安装服务端脚本，无需手动配置
 - **事件驱动**：基于 Claude Code Hook，低延迟更新
 - **自动清理**：会话结束后自动移除，支持超时清理
 
@@ -27,6 +28,44 @@ Windows 系统托盘工具，通过 SSH 实时监控 Linux 服务器上 Claude C
 | <img src="client/assets/svg/icon-disconnected.svg" width="24" /> | 断开连接 | SSH 连接失败或未连接 |
 | <img src="client/assets/svg/icon-input-needed.svg" width="24" /> | 等待输入 | Claude Code 等待用户操作 |
 | <img src="client/assets/svg/icon-running.svg" width="24" /> | 正在运行 | Claude Code 正在执行任务（动画） |
+
+## 快速开始
+
+### 1. 服务器端准备（Linux）
+
+确保服务器已安装依赖：
+
+```bash
+# Debian/Ubuntu
+sudo apt install inotify-tools jq
+
+# CentOS/RHEL
+sudo yum install inotify-tools jq
+
+# Arch
+sudo pacman -S inotify-tools jq
+```
+
+### 2. 客户端安装（Windows）
+
+**下载预编译版本**：
+- `claude-status-amd64.exe`（x64）
+- `claude-status-arm64.exe`（ARM64）
+
+**创建配置文件** `config.yaml`：
+```yaml
+server:
+  host: "your-server.com"  # 或 ~/.ssh/config 中的别名
+```
+
+程序会自动从 `~/.ssh/config` 读取用户名、端口、密钥等配置。
+
+### 3. 运行
+
+双击 `claude-status.exe` 即可。
+
+- 首次连接会**自动安装**服务端脚本并配置 Claude Code Hook
+- 图标会出现在系统托盘
 
 ## 架构
 
@@ -47,7 +86,7 @@ Windows 系统托盘工具，通过 SSH 实时监控 Linux 服务器上 Claude C
 ┌─────────────────────────────────────────────────────┼───────────┐
 │                       Windows 客户端                 │           │
 │                                           ┌─────────▼────────┐  │
-│                                           │    SSH 连接       │  │
+│  首次连接自动安装服务端 ─────────────────►│    SSH 连接       │  │
 │                                           │   JSON 解析       │  │
 │  ┌─────────────┐                          └─────────┬────────┘  │
 │  │ 系统托盘图标 │◄────────────────────────────────────┘           │
@@ -55,40 +94,6 @@ Windows 系统托盘工具，通过 SSH 实时监控 Linux 服务器上 Claude C
 │  └─────────────┘                                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
-
-## 快速开始
-
-### 1. 服务器端安装（Linux）
-
-```bash
-# 安装依赖
-sudo apt install inotify-tools jq  # Debian/Ubuntu
-# 或
-sudo yum install inotify-tools jq  # CentOS/RHEL
-
-# 运行安装脚本
-cd server && ./install.sh
-```
-
-安装脚本会自动配置 Claude Code Hook。
-
-### 2. 客户端安装（Windows）
-
-**下载预编译版本**：
-- `claude-status-amd64.exe`（x64）
-- `claude-status-arm64.exe`（ARM64）
-
-**创建配置文件** `config.yaml`：
-```yaml
-server:
-  host: "your-server.com"  # 或 ~/.ssh/config 中的别名
-```
-
-程序会自动从 `~/.ssh/config` 读取用户名、端口、密钥等配置。
-
-### 3. 运行
-
-双击 `claude-status.exe` 即可。图标会出现在系统托盘。
 
 ## 配置说明
 
@@ -110,7 +115,7 @@ status_timeout: 300
 
 ### Claude Code Hook 配置
 
-安装脚本会自动在 `~/.claude/settings.json` 中添加以下 Hook（不会影响原来的Hook）：
+客户端会自动在服务器的 `~/.claude/settings.json` 中添加以下 Hook：
 
 | Hook 事件 | 状态 | 说明 |
 |-----------|------|------|
@@ -142,26 +147,40 @@ make all
 
 ```
 claude-status/
-├── client/                      # Windows 客户端
-│   ├── cmd/claude-status/       # 入口
-│   ├── internal/                # 内部包
-│   │   ├── app/                 # 应用逻辑
-│   │   ├── config/              # 配置管理
-│   │   ├── ssh/                 # SSH 客户端
-│   │   ├── tray/                # 系统托盘
-│   │   └── logger/              # 日志
-│   ├── assets/                  # 图标资源
-│   │   ├── svg/                 # 源 SVG
-│   │   ├── icons/               # 生成的 ICO
-│   │   └── generate.sh          # 生成脚本
-│   └── config.example.yaml
-│
-└── server/                      # Linux 服务端
-    ├── install.sh               # 安装脚本
-    ├── monitor.sh               # 状态监听
-    └── hooks/
-        └── status-hook.sh       # Hook 脚本
+└── client/                      # Windows 客户端
+    ├── cmd/claude-status/       # 入口
+    ├── internal/                # 内部包
+    │   ├── app/                 # 应用逻辑
+    │   ├── config/              # 配置管理
+    │   ├── installer/           # 远程安装器（嵌入服务端脚本）
+    │   ├── ssh/                 # SSH 客户端
+    │   ├── tray/                # 系统托盘
+    │   └── logger/              # 日志
+    ├── assets/                  # 图标资源
+    │   ├── svg/                 # 源 SVG
+    │   ├── icons/               # 生成的 ICO
+    │   └── generate.sh          # 生成脚本
+    └── config.example.yaml
 ```
+
+## 故障排除
+
+### 连接失败
+
+1. 测试 SSH 连接：`ssh your-server`
+2. 检查密钥权限：`chmod 600 ~/.ssh/id_rsa`
+3. 查看客户端日志：`%LOCALAPPDATA%\claude-status\claude-status.log`
+
+### 自动安装失败
+
+确保服务器已安装依赖：
+```bash
+sudo apt install inotify-tools jq  # Debian/Ubuntu
+```
+
+### 状态不更新
+
+重启 Claude Code 会话以加载新的 Hook 配置。
 
 ## License
 

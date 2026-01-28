@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"claude-status/internal/config"
+	"claude-status/internal/installer"
 	"claude-status/internal/logger"
 	"claude-status/internal/ssh"
 	"claude-status/internal/tray"
@@ -210,12 +211,54 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 	if err := sshClient.Start(); err != nil {
 		logger.Error("SSH start failed: %v", err)
 		errMsg := err.Error()
+
+		// 检测是否是服务端未配置，尝试自动安装
 		if isNotConfiguredError(errMsg) {
-			trayApp.SetError("not_configured", errMsg)
+			logger.Info("服务端未配置，尝试自动安装...")
+			trayApp.SetConnecting("正在安装服务端...")
+
+			inst := installer.NewInstaller(cfg)
+			if err := inst.Connect(); err != nil {
+				logger.Error("安装器连接失败: %v", err)
+				trayApp.SetError("install_failed", "安装失败: "+err.Error())
+				return true, nil
+			}
+
+			// 检查依赖
+			if ok, msg := inst.CheckDependencies(); !ok {
+				inst.Close()
+				logger.Error("依赖检查失败: %s", msg)
+				trayApp.SetError("install_failed", msg)
+				return true, nil
+			}
+
+			// 执行安装
+			if err := inst.Install(); err != nil {
+				inst.Close()
+				logger.Error("安装失败: %v", err)
+				trayApp.SetError("install_failed", "安装失败: "+err.Error())
+				return true, nil
+			}
+			inst.Close()
+
+			logger.Info("服务端安装完成，重新启动监听...")
+			// 重新创建 SSH 客户端并启动
+			sshClient.Close()
+			sshClient = ssh.NewClient(cfg)
+			if err := sshClient.Connect(); err != nil {
+				logger.Error("重新连接失败: %v", err)
+				trayApp.SetError("connection_failed", err.Error())
+				return true, nil
+			}
+			if err := sshClient.Start(); err != nil {
+				logger.Error("重新启动失败: %v", err)
+				trayApp.SetError("session_error", err.Error())
+				return true, nil
+			}
 		} else {
 			trayApp.SetError("session_error", errMsg)
+			return true, nil
 		}
-		return true, nil
 	}
 	logger.Info("SSH session started")
 	trayApp.SetConnected(true, displayName)
