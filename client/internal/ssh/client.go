@@ -49,13 +49,19 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("解析密钥失败: %w", err)
 	}
 
+	// 获取主机密钥验证回调
+	hostKeyCallback, err := GetHostKeyCallback()
+	if err != nil {
+		return fmt.Errorf("初始化主机密钥验证失败: %w", err)
+	}
+
 	// SSH 配置
 	sshConfig := &ssh.ClientConfig{
 		User: c.config.Server.User,
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // MVP 版本暂不验证主机密钥
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         10 * time.Second,
 	}
 

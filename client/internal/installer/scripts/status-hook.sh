@@ -27,6 +27,18 @@ STATUS_FILE="$STATUS_DIR/${PROJECT_HASH}.json"
 # 使用 printf 获取时间戳（bash 内置，无需 fork）
 printf -v TIMESTAMP '%(%s)T' -1
 
+# JSON 转义函数（转义 \ 和 "）
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"  # 先转义反斜杠
+    s="${s//\"/\\\"}"  # 再转义双引号
+    printf '%s' "$s"
+}
+
+# 转义 JSON 字符串值
+PROJECT_DIR_ESCAPED=$(json_escape "$PROJECT_DIR")
+PROJECT_NAME_ESCAPED=$(json_escape "$PROJECT_NAME")
+
 # 直接写入文件（使用 printf 替代 cat，无需 fork）
 printf '{
   "project": "%s",
@@ -34,6 +46,6 @@ printf '{
   "status": "%s",
   "updated_at": %s
 }
-' "$PROJECT_DIR" "$PROJECT_NAME" "$STATUS" "$TIMESTAMP" > "$STATUS_FILE"
+' "$PROJECT_DIR_ESCAPED" "$PROJECT_NAME_ESCAPED" "$STATUS" "$TIMESTAMP" > "$STATUS_FILE"
 
 exit 0

@@ -11,6 +11,7 @@ import (
 
 	"claude-status/internal/config"
 	"claude-status/internal/logger"
+	sshclient "claude-status/internal/ssh"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -44,13 +45,19 @@ func (i *Installer) Connect() error {
 		return fmt.Errorf("加载密钥失败: %w", err)
 	}
 
+	// 获取主机密钥验证回调
+	hostKeyCallback, err := sshclient.GetHostKeyCallback()
+	if err != nil {
+		return fmt.Errorf("初始化主机密钥验证失败: %w", err)
+	}
+
 	// SSH 配置
 	sshConfig := &ssh.ClientConfig{
 		User: i.cfg.Server.User,
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(key),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 	}
 
 	// 连接

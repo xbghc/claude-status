@@ -154,16 +154,3 @@ func (c *Client) ErrorChan() <-chan error {
 func (c *Client) Done() <-chan struct{} {
 	return c.doneCh
 }
-
-// RunCommand 执行命令并返回输出
-func (c *Client) RunCommand(command string) (string, error) {
-	args := []string{}
-	if c.cfg.WSL.Distro != "" {
-		args = append(args, "-d", c.cfg.WSL.Distro)
-	}
-	args = append(args, "--", "bash", "-c", command)
-
-	cmd := exec.Command("wsl", args...)
-	output, err := cmd.CombinedOutput()
-	return string(output), err
-}
