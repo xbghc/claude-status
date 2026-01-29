@@ -7,11 +7,11 @@
 <br />
 
 <p>
-  <img src="client/assets/svg/icon-disconnected.svg" width="64" alt="disconnected" />
+  <img src="client/assets/svg/icon-disconnected-dark.svg" width="64" alt="disconnected" />
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="client/assets/svg/icon-input-needed.svg" width="64" alt="idle" />
+  <img src="client/assets/svg/icon-input-needed-dark.svg" width="64" alt="idle" />
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="client/assets/svg/icon-running.svg" width="64" alt="running" />
+  <img src="client/assets/svg/icon-running-dark.svg" width="64" alt="running" />
 </p>
 
 **断开连接** · **等待输入** · **正在运行**

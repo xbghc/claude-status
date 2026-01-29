@@ -6,7 +6,7 @@ import (
 
 // 暗色模式图标
 //
-//go:embed disconnected.ico
+//go:embed disconnected-dark.ico
 var DisconnectedDark []byte
 
 //go:embed input-needed-dark.ico
@@ -89,79 +89,79 @@ var RunningDarkFrame23 []byte
 //go:embed disconnected-light.ico
 var DisconnectedLight []byte
 
-//go:embed input-needed.ico
+//go:embed input-needed-light.ico
 var InputNeededLight []byte
 
-//go:embed running-frame0.ico
+//go:embed running-light-frame0.ico
 var RunningLightFrame0 []byte
 
-//go:embed running-frame1.ico
+//go:embed running-light-frame1.ico
 var RunningLightFrame1 []byte
 
-//go:embed running-frame2.ico
+//go:embed running-light-frame2.ico
 var RunningLightFrame2 []byte
 
-//go:embed running-frame3.ico
+//go:embed running-light-frame3.ico
 var RunningLightFrame3 []byte
 
-//go:embed running-frame4.ico
+//go:embed running-light-frame4.ico
 var RunningLightFrame4 []byte
 
-//go:embed running-frame5.ico
+//go:embed running-light-frame5.ico
 var RunningLightFrame5 []byte
 
-//go:embed running-frame6.ico
+//go:embed running-light-frame6.ico
 var RunningLightFrame6 []byte
 
-//go:embed running-frame7.ico
+//go:embed running-light-frame7.ico
 var RunningLightFrame7 []byte
 
-//go:embed running-frame8.ico
+//go:embed running-light-frame8.ico
 var RunningLightFrame8 []byte
 
-//go:embed running-frame9.ico
+//go:embed running-light-frame9.ico
 var RunningLightFrame9 []byte
 
-//go:embed running-frame10.ico
+//go:embed running-light-frame10.ico
 var RunningLightFrame10 []byte
 
-//go:embed running-frame11.ico
+//go:embed running-light-frame11.ico
 var RunningLightFrame11 []byte
 
-//go:embed running-frame12.ico
+//go:embed running-light-frame12.ico
 var RunningLightFrame12 []byte
 
-//go:embed running-frame13.ico
+//go:embed running-light-frame13.ico
 var RunningLightFrame13 []byte
 
-//go:embed running-frame14.ico
+//go:embed running-light-frame14.ico
 var RunningLightFrame14 []byte
 
-//go:embed running-frame15.ico
+//go:embed running-light-frame15.ico
 var RunningLightFrame15 []byte
 
-//go:embed running-frame16.ico
+//go:embed running-light-frame16.ico
 var RunningLightFrame16 []byte
 
-//go:embed running-frame17.ico
+//go:embed running-light-frame17.ico
 var RunningLightFrame17 []byte
 
-//go:embed running-frame18.ico
+//go:embed running-light-frame18.ico
 var RunningLightFrame18 []byte
 
-//go:embed running-frame19.ico
+//go:embed running-light-frame19.ico
 var RunningLightFrame19 []byte
 
-//go:embed running-frame20.ico
+//go:embed running-light-frame20.ico
 var RunningLightFrame20 []byte
 
-//go:embed running-frame21.ico
+//go:embed running-light-frame21.ico
 var RunningLightFrame21 []byte
 
-//go:embed running-frame22.ico
+//go:embed running-light-frame22.ico
 var RunningLightFrame22 []byte
 
-//go:embed running-frame23.ico
+//go:embed running-light-frame23.ico
 var RunningLightFrame23 []byte
 
 var RunningDarkFrames = [][]byte{
