@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+          go install github.com/tc-hib/go-winres@latest
+
+      - name: Build
+        working-directory: client
+        run: |
+          make icons
+          make winres
+          make amd64 arm64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            client/build/claude-status-amd64.exe
+            client/build/claude-status-arm64.exe
+          generate_release_notes: true
