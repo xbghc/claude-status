@@ -4,6 +4,7 @@
 # 由 Claude Code Hook 调用，更新状态文件
 #
 # 性能优化：后台执行，立即返回，不阻塞 Claude Code
+# 性能优化：状态相同时跳过写入
 
 # 捕获参数和环境变量
 _STATUS="${1:-idle}"
@@ -16,13 +17,20 @@ _PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
     # 确保状态目录存在
     [[ -d "$STATUS_DIR" ]] || mkdir -p "$STATUS_DIR"
 
-    # 使用 bash 内置的字符串操作替代 basename
-    PROJECT_NAME="${_PROJECT_DIR##*/}"
-
     # 使用简单的哈希替代 md5sum
     hash_str="${#_PROJECT_DIR}_${_PROJECT_DIR//[^a-zA-Z0-9]/_}"
     PROJECT_HASH="${hash_str:0:64}"
     STATUS_FILE="$STATUS_DIR/${PROJECT_HASH}.json"
+
+    # 检查当前状态，相同则跳过写入
+    if [[ -f "$STATUS_FILE" ]]; then
+        # 简单提取 status 字段值（避免依赖 jq）
+        current_status=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$STATUS_FILE" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+        [[ "$current_status" == "$_STATUS" ]] && exit 0
+    fi
+
+    # 使用 bash 内置的字符串操作替代 basename
+    PROJECT_NAME="${_PROJECT_DIR##*/}"
 
     # 使用 printf 获取时间戳
     printf -v TIMESTAMP '%(%s)T' -1
