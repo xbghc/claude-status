@@ -16,19 +16,27 @@ import (
 	"github.com/getlantern/systray"
 )
 
+// serverMenuItem 服务器菜单项结构
+type serverMenuItem struct {
+	server      config.ServerConfig
+	menuItem    *systray.MenuItem
+	mConnect    *systray.MenuItem // 连接/重新连接
+	mDisconnect *systray.MenuItem // 断开连接（仅当前服务器显示）
+}
+
 // App 系统托盘应用
 type App struct {
-	statuses       []monitor.ProjectStatus
-	servers        []config.ServerConfig
-	quitCh         chan struct{}
-	reconnectCh    chan struct{}
-	serverSelectCh chan config.ServerConfig
-	updateCh       chan []monitor.ProjectStatus
-	currentIcon    string
-	mStatus        *systray.MenuItem
-	mReconnect     *systray.MenuItem
-	mServerMenu    *systray.MenuItem
-	serverItems    []*systray.MenuItem
+	statuses        []monitor.ProjectStatus
+	servers         []config.ServerConfig
+	quitCh          chan struct{}
+	disconnectCh    chan struct{}
+	serverSelectCh  chan config.ServerConfig
+	updateCh        chan []monitor.ProjectStatus
+	currentIcon     string
+	mStatus         *systray.MenuItem
+	mConnectionMenu *systray.MenuItem
+	serverMenuItems []*serverMenuItem
+	connectedServer string
 
 	// 主题相关
 	isDarkMode bool
@@ -52,10 +60,12 @@ func NewApp() *App {
 		statuses:          make([]monitor.ProjectStatus, 0),
 		servers:           make([]config.ServerConfig, 0),
 		quitCh:            make(chan struct{}),
-		reconnectCh:       make(chan struct{}, 1),
+		disconnectCh:      make(chan struct{}, 1),
 		serverSelectCh:    make(chan config.ServerConfig, 1),
 		updateCh:          make(chan []monitor.ProjectStatus, 10),
 		currentIcon:       "",
+		serverMenuItems:   make([]*serverMenuItem, 0),
+		connectedServer:   "",
 		isDarkMode:        IsDarkMode(),
 		animFrame:         0,
 		workingStartTimes: make(map[string]int64),
@@ -99,13 +109,8 @@ func (t *App) onReady() {
 
 	systray.AddSeparator()
 
-	// 添加服务器选择菜单
-	t.mServerMenu = systray.AddMenuItem("选择服务器", "选择要连接的服务器")
-	t.mServerMenu.Hide()
-
-	// 添加重连菜单项
-	t.mReconnect = systray.AddMenuItem("重新连接", "重新连接到服务器")
-	t.mReconnect.Disable()
+	// 添加连接菜单
+	t.mConnectionMenu = systray.AddMenuItem("连接", "连接管理")
 
 	systray.AddSeparator()
 
@@ -116,13 +121,6 @@ func (t *App) onReady() {
 	go func() {
 		for {
 			select {
-			case <-t.mReconnect.ClickedCh:
-				t.mReconnect.Disable()
-				t.mStatus.SetTitle("正在重新连接...")
-				select {
-				case t.reconnectCh <- struct{}{}:
-				default:
-				}
 			case <-mQuit.ClickedCh:
 				close(t.quitCh)
 				systray.Quit()
@@ -242,28 +240,41 @@ func (t *App) SetServers(servers []config.ServerConfig) {
 	t.servers = servers
 
 	if len(servers) == 0 {
-		t.mServerMenu.Hide()
 		return
 	}
 
-	t.mServerMenu.Show()
 	t.mStatus.SetTitle("请选择服务器")
 	systray.SetTooltip("Claude Code Status Monitor\n\n请从菜单选择要连接的服务器")
 
-	// 创建服务器子菜单项
-	t.serverItems = make([]*systray.MenuItem, len(servers))
+	// 创建服务器子菜单项（三级菜单）
+	t.serverMenuItems = make([]*serverMenuItem, len(servers))
 	for i, server := range servers {
-		item := t.mServerMenu.AddSubMenuItem(server.Name, fmt.Sprintf("连接到 %s", server.Host))
-		t.serverItems[i] = item
+		item := &serverMenuItem{server: server}
 
-		go func(srv config.ServerConfig, menuItem *systray.MenuItem) {
+		// 创建服务器子菜单
+		item.menuItem = t.mConnectionMenu.AddSubMenuItem(server.Name, fmt.Sprintf("连接到 %s", server.Host))
+
+		// 添加操作子菜单
+		item.mConnect = item.menuItem.AddSubMenuItem("连接", "连接到此服务器")
+		item.mDisconnect = item.menuItem.AddSubMenuItem("断开连接", "断开此服务器连接")
+		item.mDisconnect.Hide() // 初始隐藏断开选项
+
+		t.serverMenuItems[i] = item
+
+		// 监听点击事件
+		go func(srv config.ServerConfig, mi *serverMenuItem) {
 			for {
 				select {
-				case <-menuItem.ClickedCh:
+				case <-mi.mConnect.ClickedCh:
 					t.mStatus.SetTitle("正在连接...")
-					t.mServerMenu.Hide()
 					select {
 					case t.serverSelectCh <- srv:
+					default:
+					}
+				case <-mi.mDisconnect.ClickedCh:
+					t.mStatus.SetTitle("正在断开...")
+					select {
+					case t.disconnectCh <- struct{}{}:
 					default:
 					}
 				case <-t.quitCh:
@@ -271,6 +282,23 @@ func (t *App) SetServers(servers []config.ServerConfig) {
 				}
 			}
 		}(server, item)
+	}
+}
+
+// updateServerMenus 更新服务器菜单状态
+func (t *App) updateServerMenus() {
+	for _, item := range t.serverMenuItems {
+		if item.server.Name == t.connectedServer {
+			// 当前连接的服务器
+			item.menuItem.SetTitle("✓ " + item.server.Name + " (已连接)")
+			item.mConnect.SetTitle("重新连接")
+			item.mDisconnect.Show()
+		} else {
+			// 未连接的服务器
+			item.menuItem.SetTitle(item.server.Name)
+			item.mConnect.SetTitle("连接")
+			item.mDisconnect.Hide()
+		}
 	}
 }
 
@@ -441,9 +469,9 @@ func (t *App) QuitChan() <-chan struct{} {
 	return t.quitCh
 }
 
-// ReconnectChan 返回重连 channel
-func (t *App) ReconnectChan() <-chan struct{} {
-	return t.reconnectCh
+// DisconnectChan 返回断开连接 channel
+func (t *App) DisconnectChan() <-chan struct{} {
+	return t.disconnectCh
 }
 
 // ServerSelectChan 返回服务器选择 channel
@@ -456,8 +484,6 @@ func (t *App) SetConnecting(msg string) {
 	t.setIcon("disconnected")
 	systray.SetTooltip("Claude Code Status Monitor - 正在连接...\n" + msg)
 	t.mStatus.SetTitle("正在连接 - " + msg)
-	t.mReconnect.Disable() // 连接中禁用
-	t.mServerMenu.Hide()
 }
 
 // SetConnected 设置连接状态
@@ -466,14 +492,22 @@ func (t *App) SetConnected(connected bool, msg string) {
 		t.setIcon("input-needed")
 		systray.SetTooltip("Claude Code Status Monitor - 已连接\n" + msg)
 		t.mStatus.SetTitle("已连接 - " + msg)
-		t.mReconnect.Enable() // 连接成功，允许手动重连
-		t.mServerMenu.Hide()
+		t.connectedServer = msg
+		t.updateServerMenus()
 	} else {
 		t.setIcon("disconnected")
 		systray.SetTooltip("Claude Code Status Monitor - " + msg)
 		t.mStatus.SetTitle(msg)
-		t.mReconnect.Enable()
 	}
+}
+
+// SetDisconnected 设置用户主动断开状态
+func (t *App) SetDisconnected() {
+	t.setIcon("disconnected")
+	t.mStatus.SetTitle("已断开连接")
+	systray.SetTooltip("Claude Code Status Monitor - 已断开连接")
+	t.connectedServer = ""
+	t.updateServerMenus()
 }
 
 // SetError 设置错误状态
@@ -494,16 +528,12 @@ func (t *App) SetError(errType string, msg string) {
 	case "no_config":
 		statusMsg = "未配置"
 		systray.SetTooltip("Claude Code Status Monitor\n\n请选择要连接的服务器，或创建 config.yaml")
-		if len(t.servers) > 0 {
-			t.mServerMenu.Show()
-		}
 	default:
 		statusMsg = msg
 		systray.SetTooltip("Claude Code Status Monitor - " + msg)
 	}
 
 	t.mStatus.SetTitle(statusMsg)
-	t.mReconnect.Enable()
 }
 
 // ShowServerSelection 显示服务器选择提示
@@ -511,7 +541,4 @@ func (t *App) ShowServerSelection() {
 	t.setIcon("disconnected")
 	t.mStatus.SetTitle("请选择服务器")
 	systray.SetTooltip("Claude Code Status Monitor\n\n请从菜单选择要连接的服务器")
-	if len(t.servers) > 0 {
-		t.mServerMenu.Show()
-	}
 }

@@ -19,7 +19,7 @@ icons:
 winres:
 	@echo "=== 生成 Windows 资源 ==="
 	@mkdir -p $(CMD_DIR)/winres
-	@convert -background none -density 384 assets/svg/icon-running-dark.svg -resize 256x256 -depth 8 PNG32:$(CMD_DIR)/winres/icon.png
+	@convert -background none -density 384 assets/svg/icon-running-light.svg -resize 256x256 -depth 8 PNG32:$(CMD_DIR)/winres/icon.png
 	@cd $(CMD_DIR) && go-winres make --arch amd64,arm64
 
 # 编译 Windows amd64

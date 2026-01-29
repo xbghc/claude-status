@@ -150,7 +150,7 @@ func waitForServerSelection(trayApp *tray.App, configPath string, sigCh chan os.
 func connectionManager(cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) {
 	for {
 		// 尝试连接
-		shouldContinue, newServer := runConnection(cfg, trayApp, sigCh)
+		shouldContinue, newServer, userDisconnected, autoReconnect := runConnection(cfg, trayApp, sigCh)
 		if !shouldContinue {
 			return
 		}
@@ -164,14 +164,19 @@ func connectionManager(cfg *config.Config, trayApp *tray.App, configPath string,
 			continue
 		}
 
-		// 等待重连信号、服务器选择或退出
-		select {
-		case <-trayApp.ReconnectChan():
-			// 用户请求重连，继续循环使用当前配置
+		// 如果需要自动重连（版本更新后），直接继续循环
+		if autoReconnect {
 			continue
+		}
 
+		// 如果是用户主动断开，设置断开状态
+		if userDisconnected {
+			trayApp.SetDisconnected()
+		}
+
+		// 等待用户选择服务器或退出
+		select {
 		case server := <-trayApp.ServerSelectChan():
-			// 用户选择了新服务器
 			cfg = config.NewFromServer(server)
 			cfg.ApplySSHConfig()
 			trayApp.SetStatusTimeout(cfg.StatusTimeout)
@@ -187,8 +192,8 @@ func connectionManager(cfg *config.Config, trayApp *tray.App, configPath string,
 	}
 }
 
-// runConnection 运行一次连接，返回 (是否继续, 新选择的服务器)
-func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) (bool, *config.ServerConfig) {
+// runConnection 运行一次连接，返回 (是否继续, 新选择的服务器, 是否用户主动断开, 是否自动重连)
+func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) (bool, *config.ServerConfig, bool, bool) {
 	// 获取显示名称
 	displayName := getDisplayName(cfg)
 
@@ -211,7 +216,7 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 	if err := client.Connect(); err != nil {
 		logger.Error("Connect failed: %v", err)
 		trayApp.SetError("connection_failed", err.Error())
-		return true, nil // 继续等待重连
+		return true, nil, false, false // 等待用户操作
 	}
 	defer client.Close()
 	logger.Info("Connected successfully")
@@ -225,17 +230,19 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 		if errors.Is(err, ssh.ErrVersionMismatch) || errors.Is(err, wsl.ErrVersionMismatch) {
 			logger.Info("版本不匹配，触发重新安装...")
 			client.Close()
-			return triggerReinstall(cfg, inst, trayApp)
+			shouldContinue, newServer := triggerReinstall(cfg, inst, trayApp)
+			return shouldContinue, newServer, false, true // 自动重连
 		}
 
 		// 检测是否是服务端未配置，尝试自动安装
 		if isNotConfiguredError(errMsg) {
 			logger.Info("服务端未配置，尝试自动安装...")
-			return triggerInstall(cfg, inst, trayApp)
+			shouldContinue, newServer := triggerInstall(cfg, inst, trayApp)
+			return shouldContinue, newServer, false, true // 自动重连
 		}
 
 		trayApp.SetError("session_error", errMsg)
-		return true, nil
+		return true, nil, false, false
 	}
 	logger.Info("Session started")
 	trayApp.SetConnected(true, displayName)
@@ -253,25 +260,26 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 			} else {
 				trayApp.SetError("session_error", errMsg)
 			}
-			return true, nil
+			return true, nil, false, false
 
 		case <-client.Done():
 			trayApp.SetError("session_error", "连接已断开")
-			return true, nil
+			return true, nil, false, false
 
 		case <-trayApp.QuitChan():
-			return false, nil
+			return false, nil, false, false
 
-		case <-trayApp.ReconnectChan():
-			// 收到重连请求，关闭当前连接并返回
-			return true, nil
+		case <-trayApp.DisconnectChan():
+			// 用户主动断开连接
+			logger.Info("用户主动断开连接")
+			return true, nil, true, false
 
 		case server := <-trayApp.ServerSelectChan():
 			// 收到服务器切换请求，返回新服务器
-			return true, &server
+			return true, &server, false, false
 
 		case <-sigCh:
-			return false, nil
+			return false, nil, false, false
 		}
 	}
 }
