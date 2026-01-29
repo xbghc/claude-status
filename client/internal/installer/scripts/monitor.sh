@@ -1,10 +1,12 @@
 #!/bin/bash
 # Claude Code Status Monitor Script
+# 版本: __VERSION__
 # 监听状态文件变化并输出 JSON 到 stdout
 # 供 SSH 客户端读取
 #
 # 依赖: inotify-tools (sudo apt install inotify-tools)
 
+SCRIPT_VERSION="__VERSION__"
 STATUS_DIR="$HOME/.claude-status"
 
 # 检查 inotifywait 是否可用
@@ -62,6 +64,9 @@ cleanup_stale() {
 
 # 禁用 stdout 缓冲
 exec 1> >(cat)
+
+# 首先输出版本信息
+echo "{\"type\":\"version\",\"version\":\"$SCRIPT_VERSION\"}"
 
 # 启动时清理并输出初始状态
 cleanup_stale

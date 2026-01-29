@@ -5,15 +5,21 @@ package wsl
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"sync"
+	"time"
 
 	"claude-status/internal/config"
 	"claude-status/internal/logger"
 	"claude-status/internal/monitor"
+	"claude-status/internal/version"
 )
+
+// ErrVersionMismatch 版本不匹配错误
+var ErrVersionMismatch = errors.New("version mismatch")
 
 // Client WSL 客户端
 type Client struct {
@@ -23,15 +29,17 @@ type Client struct {
 	errorCh   chan error
 	doneCh    chan struct{}
 	closeOnce sync.Once
+	versionOK chan bool // 版本检查结果
 }
 
 // NewClient 创建 WSL 客户端
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		cfg:      cfg,
-		statusCh: make(chan []monitor.ProjectStatus, 10),
-		errorCh:  make(chan error, 1),
-		doneCh:   make(chan struct{}),
+		cfg:       cfg,
+		statusCh:  make(chan []monitor.ProjectStatus, 10),
+		errorCh:   make(chan error, 1),
+		doneCh:    make(chan struct{}),
+		versionOK: make(chan bool, 1),
 	}
 }
 
@@ -87,12 +95,26 @@ func (c *Client) Start() error {
 		})
 	}()
 
+	// 等待版本检查结果（5秒超时）
+	select {
+	case ok := <-c.versionOK:
+		if !ok {
+			return ErrVersionMismatch
+		}
+	case <-time.After(5 * time.Second):
+		// 超时，假设是旧版本脚本（不输出版本信息）
+		logger.Info("版本检查超时，可能是旧版本脚本")
+		return ErrVersionMismatch
+	}
+
 	return nil
 }
 
 // readOutput 读取输出
 func (c *Client) readOutput(r io.Reader) {
 	scanner := bufio.NewScanner(r)
+	firstMessage := true
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		logger.Debug("WSL output: %s", line)
@@ -104,7 +126,26 @@ func (c *Client) readOutput(r io.Reader) {
 		}
 
 		switch msg.Type {
-		case "status":
+		case monitor.MsgTypeVersion:
+			if firstMessage {
+				firstMessage = false
+				// 检查版本
+				if msg.Version == version.Version {
+					logger.Info("版本匹配: %s", msg.Version)
+					select {
+					case c.versionOK <- true:
+					default:
+					}
+				} else {
+					logger.Info("版本不匹配: 服务端=%s, 客户端=%s", msg.Version, version.Version)
+					select {
+					case c.versionOK <- false:
+					default:
+					}
+				}
+			}
+
+		case monitor.MsgTypeStatus:
 			select {
 			case c.statusCh <- msg.Data:
 			default:
@@ -115,7 +156,8 @@ func (c *Client) readOutput(r io.Reader) {
 				}
 				c.statusCh <- msg.Data
 			}
-		case "error":
+
+		case monitor.MsgTypeError:
 			select {
 			case c.errorCh <- fmt.Errorf(msg.Message):
 			default:

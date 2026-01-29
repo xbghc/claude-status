@@ -12,18 +12,47 @@ import (
 	"claude-status/internal/config"
 	"claude-status/internal/logger"
 	sshclient "claude-status/internal/ssh"
+	"claude-status/internal/version"
 
 	"golang.org/x/crypto/ssh"
 )
 
 //go:embed scripts/status-hook.sh
-var StatusHookScript string
+var statusHookScriptTemplate string
 
 //go:embed scripts/monitor.sh
-var MonitorScript string
+var monitorScriptTemplate string
 
 //go:embed scripts/install-remote.sh
-var InstallRemoteScript string
+var installRemoteScriptTemplate string
+
+// GetStatusHookScript 返回替换版本号后的脚本
+func GetStatusHookScript() string {
+	return strings.ReplaceAll(statusHookScriptTemplate, "__VERSION__", version.Version)
+}
+
+// GetMonitorScript 返回替换版本号后的脚本
+func GetMonitorScript() string {
+	return strings.ReplaceAll(monitorScriptTemplate, "__VERSION__", version.Version)
+}
+
+// GetInstallRemoteScript 返回替换版本号后的脚本
+func GetInstallRemoteScript() string {
+	return strings.ReplaceAll(installRemoteScriptTemplate, "__VERSION__", version.Version)
+}
+
+// 为保持兼容性，提供变量访问（延迟初始化）
+var (
+	StatusHookScript    = ""
+	MonitorScript       = ""
+	InstallRemoteScript = ""
+)
+
+func init() {
+	StatusHookScript = GetStatusHookScript()
+	MonitorScript = GetMonitorScript()
+	InstallRemoteScript = GetInstallRemoteScript()
+}
 
 // Installer 远程安装器
 type Installer struct {

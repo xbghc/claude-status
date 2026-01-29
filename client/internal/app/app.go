@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -220,56 +221,21 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 		logger.Error("Start failed: %v", err)
 		errMsg := err.Error()
 
+		// 检测是否是版本不匹配，触发重新安装
+		if errors.Is(err, ssh.ErrVersionMismatch) || errors.Is(err, wsl.ErrVersionMismatch) {
+			logger.Info("版本不匹配，触发重新安装...")
+			client.Close()
+			return triggerReinstall(cfg, inst, trayApp)
+		}
+
 		// 检测是否是服务端未配置，尝试自动安装
 		if isNotConfiguredError(errMsg) {
 			logger.Info("服务端未配置，尝试自动安装...")
-			trayApp.SetConnecting("正在安装服务端...")
-
-			if err := inst.Connect(); err != nil {
-				logger.Error("安装器连接失败: %v", err)
-				trayApp.SetError("install_failed", "安装失败: "+err.Error())
-				return true, nil
-			}
-
-			// 检查依赖
-			if ok, msg := inst.CheckDependencies(); !ok {
-				inst.Close()
-				logger.Error("依赖检查失败: %s", msg)
-				trayApp.SetError("install_failed", msg)
-				return true, nil
-			}
-
-			// 执行安装
-			if err := inst.Install(); err != nil {
-				inst.Close()
-				logger.Error("安装失败: %v", err)
-				trayApp.SetError("install_failed", "安装失败: "+err.Error())
-				return true, nil
-			}
-			inst.Close()
-
-			logger.Info("服务端安装完成，重新启动监听...")
-			// 重新创建客户端并启动
-			client.Close()
-			if cfg.WSL.Enabled {
-				client = wsl.NewClient(cfg)
-			} else {
-				client = ssh.NewClient(cfg)
-			}
-			if err := client.Connect(); err != nil {
-				logger.Error("重新连接失败: %v", err)
-				trayApp.SetError("connection_failed", err.Error())
-				return true, nil
-			}
-			if err := client.Start(); err != nil {
-				logger.Error("重新启动失败: %v", err)
-				trayApp.SetError("session_error", err.Error())
-				return true, nil
-			}
-		} else {
-			trayApp.SetError("session_error", errMsg)
-			return true, nil
+			return triggerInstall(cfg, inst, trayApp)
 		}
+
+		trayApp.SetError("session_error", errMsg)
+		return true, nil
 	}
 	logger.Info("Session started")
 	trayApp.SetConnected(true, displayName)
@@ -357,4 +323,58 @@ func GetExecutableDir() string {
 		return "."
 	}
 	return filepath.Dir(exe)
+}
+
+// triggerInstall 触发首次安装
+func triggerInstall(cfg *config.Config, inst monitor.Installer, trayApp *tray.App) (bool, *config.ServerConfig) {
+	trayApp.SetConnecting("正在安装服务端...")
+
+	if err := inst.Connect(); err != nil {
+		logger.Error("安装器连接失败: %v", err)
+		trayApp.SetError("install_failed", "安装失败: "+err.Error())
+		return true, nil
+	}
+	defer inst.Close()
+
+	// 检查依赖
+	if ok, msg := inst.CheckDependencies(); !ok {
+		logger.Error("依赖检查失败: %s", msg)
+		trayApp.SetError("install_failed", msg)
+		return true, nil
+	}
+
+	// 执行安装
+	if err := inst.Install(); err != nil {
+		logger.Error("安装失败: %v", err)
+		trayApp.SetError("install_failed", "安装失败: "+err.Error())
+		return true, nil
+	}
+
+	logger.Info("服务端安装完成，等待重新连接...")
+	// 返回 true 让外层循环重新连接
+	return true, nil
+}
+
+// triggerReinstall 触发重新安装（版本不匹配时）
+func triggerReinstall(cfg *config.Config, inst monitor.Installer, trayApp *tray.App) (bool, *config.ServerConfig) {
+	trayApp.SetConnecting("版本不匹配，正在更新服务端...")
+
+	if err := inst.Connect(); err != nil {
+		logger.Error("安装器连接失败: %v", err)
+		trayApp.SetError("install_failed", "更新失败: "+err.Error())
+		return true, nil
+	}
+	defer inst.Close()
+
+	// 版本不匹配时跳过依赖检查（依赖应该已经安装）
+
+	// 执行安装（会覆盖旧脚本和 Hook 配置）
+	if err := inst.Install(); err != nil {
+		logger.Error("更新失败: %v", err)
+		trayApp.SetError("install_failed", "更新失败: "+err.Error())
+		return true, nil
+	}
+
+	logger.Info("服务端更新完成，等待重新连接...")
+	return true, nil
 }

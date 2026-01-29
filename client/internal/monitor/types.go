@@ -1,5 +1,12 @@
 package monitor
 
+// 消息类型常量
+const (
+	MsgTypeStatus  = "status"
+	MsgTypeError   = "error"
+	MsgTypeVersion = "version"
+)
+
 // ProjectStatus 单个项目的状态
 type ProjectStatus struct {
 	Project     string `json:"project"`
@@ -10,9 +17,10 @@ type ProjectStatus struct {
 
 // StatusMessage 状态消息
 type StatusMessage struct {
-	Type    string          `json:"type"`
-	Data    []ProjectStatus `json:"data,omitempty"`
-	Message string          `json:"message,omitempty"`
+	Type    string          `json:"type"`              // "status" | "error" | "version"
+	Data    []ProjectStatus `json:"data,omitempty"`    // type=status 时使用
+	Message string          `json:"message,omitempty"` // type=error 时使用
+	Version string          `json:"version,omitempty"` // type=version 时使用
 }
 
 // Client 监控客户端接口

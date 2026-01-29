@@ -3,6 +3,7 @@ package ssh
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,27 +12,33 @@ import (
 	"claude-status/internal/config"
 	"claude-status/internal/logger"
 	"claude-status/internal/monitor"
+	"claude-status/internal/version"
 
 	"golang.org/x/crypto/ssh"
 )
 
+// ErrVersionMismatch 版本不匹配错误
+var ErrVersionMismatch = errors.New("version mismatch")
+
 // Client SSH 客户端
 type Client struct {
-	config   *config.Config
-	client   *ssh.Client
-	session  *ssh.Session
-	statusCh chan []monitor.ProjectStatus
-	errorCh  chan error
-	done     chan struct{}
+	config    *config.Config
+	client    *ssh.Client
+	session   *ssh.Session
+	statusCh  chan []monitor.ProjectStatus
+	errorCh   chan error
+	done      chan struct{}
+	versionOK chan bool // 版本检查结果
 }
 
 // NewClient 创建 SSH 客户端
 func NewClient(cfg *config.Config) *Client {
 	return &Client{
-		config:   cfg,
-		statusCh: make(chan []monitor.ProjectStatus, 10),
-		errorCh:  make(chan error, 1),
-		done:     make(chan struct{}),
+		config:    cfg,
+		statusCh:  make(chan []monitor.ProjectStatus, 10),
+		errorCh:   make(chan error, 1),
+		done:      make(chan struct{}),
+		versionOK: make(chan bool, 1),
 	}
 }
 
@@ -108,7 +115,7 @@ func (c *Client) Start() error {
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			fmt.Printf("[远程错误] %s\n", scanner.Text())
+			logger.Debug("[远程错误] %s", scanner.Text())
 		}
 	}()
 
@@ -127,6 +134,18 @@ func (c *Client) Start() error {
 		close(c.done)
 	}()
 
+	// 等待版本检查结果（5秒超时）
+	select {
+	case ok := <-c.versionOK:
+		if !ok {
+			return ErrVersionMismatch
+		}
+	case <-time.After(5 * time.Second):
+		// 超时，假设是旧版本脚本（不输出版本信息）
+		logger.Info("版本检查超时，可能是旧版本脚本")
+		return ErrVersionMismatch
+	}
+
 	return nil
 }
 
@@ -134,6 +153,8 @@ func (c *Client) Start() error {
 func (c *Client) readOutput(r io.Reader) {
 	logger.Info("readOutput: started")
 	scanner := bufio.NewScanner(r)
+	firstMessage := true
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		logger.Debug("readOutput: received line: %s", line)
@@ -149,7 +170,26 @@ func (c *Client) readOutput(r io.Reader) {
 
 		logger.Info("readOutput: parsed message type=%s", msg.Type)
 		switch msg.Type {
-		case "status":
+		case monitor.MsgTypeVersion:
+			if firstMessage {
+				firstMessage = false
+				// 检查版本
+				if msg.Version == version.Version {
+					logger.Info("版本匹配: %s", msg.Version)
+					select {
+					case c.versionOK <- true:
+					default:
+					}
+				} else {
+					logger.Info("版本不匹配: 服务端=%s, 客户端=%s", msg.Version, version.Version)
+					select {
+					case c.versionOK <- false:
+					default:
+					}
+				}
+			}
+
+		case monitor.MsgTypeStatus:
 			logger.Info("readOutput: status update with %d projects", len(msg.Data))
 			select {
 			case c.statusCh <- msg.Data:
@@ -161,7 +201,8 @@ func (c *Client) readOutput(r io.Reader) {
 				}
 				c.statusCh <- msg.Data
 			}
-		case "error":
+
+		case monitor.MsgTypeError:
 			logger.Error("readOutput: remote error: %s", msg.Message)
 		}
 	}
