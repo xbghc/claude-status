@@ -46,14 +46,15 @@ _PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
     PROJECT_DIR_ESCAPED=$(json_escape "$_PROJECT_DIR")
     PROJECT_NAME_ESCAPED=$(json_escape "$PROJECT_NAME")
 
-    # 写入状态文件
+    # 原子写入状态文件（先写临时文件，再 mv）
+    TMP_FILE="$STATUS_FILE.tmp.$$"
     printf '{
   "project": "%s",
   "project_name": "%s",
   "status": "%s",
   "updated_at": %s
 }
-' "$PROJECT_DIR_ESCAPED" "$PROJECT_NAME_ESCAPED" "$_STATUS" "$TIMESTAMP" > "$STATUS_FILE"
+' "$PROJECT_DIR_ESCAPED" "$PROJECT_NAME_ESCAPED" "$_STATUS" "$TIMESTAMP" > "$TMP_FILE" && mv -f "$TMP_FILE" "$STATUS_FILE"
 ) &
 
 exit 0
