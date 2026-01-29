@@ -1,12 +1,51 @@
 package logger
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"time"
 )
+
+const maxLogLines = 1000
+
+// truncateLogFile 截断日志文件，只保留最近 maxLines 行
+func truncateLogFile(path string, maxLines int) {
+	file, err := os.Open(path)
+	if err != nil {
+		return // 文件不存在或无法读取，跳过
+	}
+	defer file.Close()
+
+	// 读取所有行
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	// 如果行数未超过限制，无需截断
+	if len(lines) <= maxLines {
+		return
+	}
+
+	// 只保留最后 maxLines 行
+	lines = lines[len(lines)-maxLines:]
+
+	// 重写文件
+	file.Close()
+	outFile, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	defer outFile.Close()
+
+	for _, line := range lines {
+		outFile.WriteString(line + "\n")
+	}
+}
 
 var (
 	logFile    *os.File
@@ -23,8 +62,13 @@ func Init() error {
 	}
 	exeDir := filepath.Dir(exePath)
 
-	// 创建日志文件
+	// 日志文件路径
 	logPath := filepath.Join(exeDir, "claude-status.log")
+
+	// 截断日志文件，只保留最近 N 行
+	truncateLogFile(logPath, maxLogLines)
+
+	// 创建日志文件
 	logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
