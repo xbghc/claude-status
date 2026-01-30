@@ -11,6 +11,7 @@ const (
 type ProjectStatus struct {
 	Project     string `json:"project"`
 	ProjectName string `json:"project_name"`
+	SessionId   string `json:"session_id"`
 	Status      string `json:"status"`
 	UpdatedAt   int64  `json:"updated_at"`
 }

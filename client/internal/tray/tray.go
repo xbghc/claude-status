@@ -50,7 +50,7 @@ type App struct {
 	// 状态超时（秒），0 或负数表示禁用
 	statusTimeout int64
 
-	// 记录每个项目的 working 开始时间（项目路径 -> Unix 时间戳）
+	// 记录每个会话的 working 开始时间（session_id -> Unix 时间戳）
 	workingStartTimes map[string]int64
 }
 
@@ -336,37 +336,43 @@ func (t *App) updateStatus(statuses []monitor.ProjectStatus) {
 	activeProjects := make(map[string]bool)
 
 	for _, s := range statuses {
+		// 使用 session_id 作为唯一标识，如果没有则退回到 project
+		sessionKey := s.SessionId
+		if sessionKey == "" {
+			sessionKey = s.Project
+		}
+
 		// 跳过已停止的会话，并清除其计时
 		if s.Status == "stopped" {
-			delete(t.workingStartTimes, s.Project)
+			delete(t.workingStartTimes, sessionKey)
 			continue
 		}
 		// 跳过超时的项目（statusTimeout > 0 时启用）
 		if t.statusTimeout > 0 && now-s.UpdatedAt > t.statusTimeout {
-			delete(t.workingStartTimes, s.Project)
+			delete(t.workingStartTimes, sessionKey)
 			continue
 		}
 
-		activeProjects[s.Project] = true
+		activeProjects[sessionKey] = true
 
 		// 更新 working 开始时间
 		if s.Status == "working" {
 			// 如果之前没有记录开始时间，使用服务器的 updated_at 作为开始时间
-			if _, exists := t.workingStartTimes[s.Project]; !exists {
-				t.workingStartTimes[s.Project] = s.UpdatedAt
+			if _, exists := t.workingStartTimes[sessionKey]; !exists {
+				t.workingStartTimes[sessionKey] = s.UpdatedAt
 			}
 		} else {
 			// idle 状态清除计时
-			delete(t.workingStartTimes, s.Project)
+			delete(t.workingStartTimes, sessionKey)
 		}
 
 		filtered = append(filtered, s)
 	}
 
-	// 清理不再存在的项目
-	for project := range t.workingStartTimes {
-		if !activeProjects[project] {
-			delete(t.workingStartTimes, project)
+	// 清理不再存在的会话
+	for sessionKey := range t.workingStartTimes {
+		if !activeProjects[sessionKey] {
+			delete(t.workingStartTimes, sessionKey)
 		}
 	}
 
@@ -422,20 +428,42 @@ func (t *App) buildTooltip() string {
 	workingCount := 0
 	idleCount := 0
 
+	// 统计每个项目的会话数量，用于决定是否显示序号
+	projectSessionCount := make(map[string]int)
 	for _, s := range t.statuses {
+		projectSessionCount[s.Project]++
+	}
+
+	// 记录每个项目已显示的会话序号
+	projectSessionIndex := make(map[string]int)
+
+	for _, s := range t.statuses {
+		// 使用 session_id 作为唯一标识
+		sessionKey := s.SessionId
+		if sessionKey == "" {
+			sessionKey = s.Project
+		}
+
+		// 决定显示名称（同一项目多会话时显示序号）
+		displayName := s.ProjectName
+		if projectSessionCount[s.Project] > 1 {
+			projectSessionIndex[s.Project]++
+			displayName = fmt.Sprintf("%s #%d", s.ProjectName, projectSessionIndex[s.Project])
+		}
+
 		if s.Status == "working" {
 			workingCount++
 			// working 状态显示运行时间（从开始时间算起）
-			if startTime, exists := t.workingStartTimes[s.Project]; exists {
+			if startTime, exists := t.workingStartTimes[sessionKey]; exists {
 				duration := time.Since(time.Unix(startTime, 0))
-				fmt.Fprintf(&sb, "● %s (%s)\n", s.ProjectName, formatDuration(duration))
+				fmt.Fprintf(&sb, "● %s (%s)\n", displayName, formatDuration(duration))
 			} else {
-				fmt.Fprintf(&sb, "● %s\n", s.ProjectName)
+				fmt.Fprintf(&sb, "● %s\n", displayName)
 			}
 		} else {
 			idleCount++
 			// idle 状态不显示计时
-			fmt.Fprintf(&sb, "○ %s\n", s.ProjectName)
+			fmt.Fprintf(&sb, "○ %s\n", displayName)
 		}
 	}
 
