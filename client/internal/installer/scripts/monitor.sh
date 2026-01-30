@@ -22,10 +22,16 @@ mkdir -p "$STATUS_DIR"
 output_status() {
     local data="[]"
     local first=true
+    local file_count=0
+
+    # 调试：列出状态目录中的文件
+    echo "[output_status] Scanning $STATUS_DIR" >&2
 
     # 读取所有状态文件
     for file in "$STATUS_DIR"/*.json; do
         [ -f "$file" ] || continue
+        file_count=$((file_count + 1))
+        echo "[output_status] Found: $file" >&2
 
         # 读取并压缩成单行（移除换行符）
         content=$(tr -d '\n' < "$file" 2>/dev/null || echo "{}")
@@ -42,6 +48,7 @@ output_status() {
         data="$data]"
     fi
 
+    echo "[output_status] Sending $file_count files" >&2
     echo "{\"type\":\"status\",\"data\":$data}"
 }
 
@@ -53,10 +60,19 @@ cleanup_stale() {
     for file in "$STATUS_DIR"/*.json; do
         [ -f "$file" ] || continue
 
-        updated_at=$(grep -o '"updated_at":[0-9]*' "$file" | grep -o '[0-9]*' || echo "0")
+        # 修复：匹配 "updated_at": 1234567890 或 "updated_at":1234567890 两种格式
+        updated_at=$(grep -oE '"updated_at"[[:space:]]*:[[:space:]]*[0-9]+' "$file" | grep -oE '[0-9]+' || echo "0")
+
+        # 如果提取失败，跳过此文件（不删除）
+        if [ "$updated_at" = "0" ] || [ -z "$updated_at" ]; then
+            echo "[cleanup_stale] Warning: Failed to extract updated_at from $file, skipping" >&2
+            continue
+        fi
+
         age=$((now - updated_at))
 
         if [ "$age" -gt "$max_age" ]; then
+            echo "[cleanup_stale] Removing stale file: $file (age=${age}s)" >&2
             rm -f "$file"
         fi
     done

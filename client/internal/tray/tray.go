@@ -4,28 +4,46 @@ package tray
 
 import (
 	"fmt"
-	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"claude-status/assets/icons"
 	"claude-status/internal/config"
 	"claude-status/internal/logger"
 	"claude-status/internal/monitor"
+	"claude-status/internal/tray/popup"
 
-	"github.com/getlantern/systray"
+	"github.com/lxn/walk"
+	"github.com/lxn/win"
+)
+
+// 托盘消息 ID
+const (
+	WM_TRAYICON = win.WM_USER + 1
 )
 
 // serverMenuItem 服务器菜单项结构
 type serverMenuItem struct {
 	server      config.ServerConfig
-	menuItem    *systray.MenuItem
-	mConnect    *systray.MenuItem // 连接/重新连接
-	mDisconnect *systray.MenuItem // 断开连接（仅当前服务器显示）
+	menuItem    *walk.Action
+	mConnect    *walk.Action
+	mDisconnect *walk.Action
+	subMenu     *walk.Menu
 }
 
 // App 系统托盘应用
 type App struct {
+	mainWindow    *walk.MainWindow
+	notifyIcon    *walk.NotifyIcon
+	popupWindow   *popup.PopupWindow
+	contextMenu   *walk.Menu
+	mStatus       *walk.Action
+	mConnection   *walk.Action
+	connectionMenu *walk.Menu
+	serverMenuItems []*serverMenuItem
+
 	statuses        []monitor.ProjectStatus
 	servers         []config.ServerConfig
 	quitCh          chan struct{}
@@ -33,9 +51,6 @@ type App struct {
 	serverSelectCh  chan config.ServerConfig
 	updateCh        chan []monitor.ProjectStatus
 	currentIcon     string
-	mStatus         *systray.MenuItem
-	mConnectionMenu *systray.MenuItem
-	serverMenuItems []*serverMenuItem
 	connectedServer string
 
 	// 主题相关
@@ -52,6 +67,11 @@ type App struct {
 
 	// 记录每个会话的 working 开始时间（session_id -> Unix 时间戳）
 	workingStartTimes map[string]int64
+
+	// 悬浮检测
+	hoverMu       sync.Mutex
+	isHovering    bool
+	lastCheckTime time.Time
 }
 
 // NewApp 创建托盘应用
@@ -74,63 +94,283 @@ func NewApp() *App {
 
 // Run 运行托盘应用
 func (t *App) Run(onReady func(), onQuit func()) {
-	systray.Run(func() {
-		t.onReady()
-		if onReady != nil {
-			onReady()
-		}
-	}, func() {
-		t.stopAnimation()
-		if onQuit != nil {
-			onQuit()
-		}
-	})
+	var err error
+
+	// 创建隐藏的主窗口（用于消息循环）
+	t.mainWindow, err = walk.NewMainWindow()
+	if err != nil {
+		logger.Error("Failed to create main window: %v", err)
+		return
+	}
+	t.mainWindow.SetVisible(false)
+
+	// 创建托盘图标
+	t.notifyIcon, err = walk.NewNotifyIcon(t.mainWindow)
+	if err != nil {
+		logger.Error("Failed to create notify icon: %v", err)
+		return
+	}
+
+	// 创建悬浮窗口
+	t.popupWindow, err = popup.NewPopupWindow()
+	if err != nil {
+		logger.Error("Failed to create popup window: %v", err)
+		// 继续运行，只是没有悬浮窗口功能
+	} else {
+		// 设置初始主题
+		t.popupWindow.SetDarkMode(t.isDarkMode)
+	}
+
+	// 初始化托盘
+	t.onReady()
+
+	// 启动悬浮检测
+	t.startHoverDetection()
+
+	if onReady != nil {
+		go onReady()
+	}
+
+	// 运行消息循环
+	t.mainWindow.Run()
+
+	// 清理
+	t.stopAnimation()
+	if t.popupWindow != nil {
+		t.popupWindow.Dispose()
+	}
+	t.notifyIcon.Dispose()
+
+	if onQuit != nil {
+		onQuit()
+	}
 }
 
 // onReady 托盘就绪回调
 func (t *App) onReady() {
 	logger.Info("Tray onReady called, isDarkMode=%v", t.isDarkMode)
+
+	// 设置图标
 	t.setIcon("disconnected")
-	systray.SetTitle("Claude Status")
-	systray.SetTooltip("Claude Code Status Monitor - 未连接")
+	t.notifyIcon.SetToolTip("Claude Code Status - 未连接")
+	t.notifyIcon.SetVisible(true)
+
+	// 创建右键菜单
+	t.setupContextMenu()
+
+	// 设置鼠标事件（右键菜单由 walk 自动处理）
+	t.notifyIcon.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
+		if button == walk.LeftButton {
+			// 左键切换悬浮窗口
+			t.togglePopup()
+		}
+	})
 
 	// 监听系统主题变化
 	MonitorThemeChange(func(isDark bool) {
 		logger.Info("Theme changed: isDarkMode=%v", isDark)
 		t.isDarkMode = isDark
 		t.refreshIcon()
+		// 同步弹窗主题
+		if t.popupWindow != nil {
+			t.popupWindow.SetDarkMode(isDark)
+		}
 	})
 
 	logger.Info("Tray initialized")
 
-	// 添加状态信息菜单项
-	t.mStatus = systray.AddMenuItem("未配置", "")
-	t.mStatus.Disable()
+	// 监听状态更新
+	go t.watchUpdates()
+}
 
-	systray.AddSeparator()
+// setupContextMenu 设置右键菜单
+func (t *App) setupContextMenu() {
+	// 获取托盘图标的上下文菜单
+	t.contextMenu = t.notifyIcon.ContextMenu()
 
-	// 添加连接菜单
-	t.mConnectionMenu = systray.AddMenuItem("连接", "连接管理")
+	// 状态菜单项
+	t.mStatus = walk.NewAction()
+	t.mStatus.SetText("未配置")
+	t.mStatus.SetEnabled(false)
+	t.contextMenu.Actions().Add(t.mStatus)
 
-	systray.AddSeparator()
+	// 分隔符
+	t.contextMenu.Actions().Add(walk.NewSeparatorAction())
 
-	// 添加退出菜单项
-	mQuit := systray.AddMenuItem("退出", "退出程序")
+	// 连接菜单
+	t.connectionMenu, _ = walk.NewMenu()
+	t.mConnection = walk.NewMenuAction(t.connectionMenu)
+	t.mConnection.SetText("连接")
+	t.contextMenu.Actions().Add(t.mConnection)
 
-	// 监听菜单点击
+	// 分隔符
+	t.contextMenu.Actions().Add(walk.NewSeparatorAction())
+
+	// 退出菜单项
+	quitAction := walk.NewAction()
+	quitAction.SetText("退出")
+	quitAction.Triggered().Attach(func() {
+		close(t.quitCh)
+		walk.App().Exit(0)
+	})
+	t.contextMenu.Actions().Add(quitAction)
+}
+
+// startHoverDetection 启动悬浮检测
+func (t *App) startHoverDetection() {
 	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
 		for {
 			select {
-			case <-mQuit.ClickedCh:
-				close(t.quitCh)
-				systray.Quit()
+			case <-ticker.C:
+				t.checkHover()
+			case <-t.quitCh:
 				return
 			}
 		}
 	}()
+}
 
-	// 监听状态更新
-	go t.watchUpdates()
+// checkHover 检查鼠标是否悬浮在托盘图标上
+func (t *App) checkHover() {
+	// 未连接时不显示弹窗，由 tooltip 显示状态
+	if t.connectedServer == "" {
+		return
+	}
+
+	iconRect := t.getTrayIconRect()
+	if iconRect == nil {
+		return
+	}
+
+	var pt win.POINT
+	win.GetCursorPos(&pt)
+
+	// 检查鼠标是否在图标范围内
+	isInIcon := pt.X >= iconRect.Left && pt.X <= iconRect.Right &&
+		pt.Y >= iconRect.Top && pt.Y <= iconRect.Bottom
+
+	// 检查是否在弹窗范围内
+	isInPopup := false
+	if t.popupWindow != nil && t.popupWindow.IsVisible() {
+		isInPopup = t.popupWindow.IsHovered()
+	}
+
+	t.hoverMu.Lock()
+	wasHovering := t.isHovering
+	t.isHovering = isInIcon || isInPopup
+	t.hoverMu.Unlock()
+
+	if isInIcon && !wasHovering {
+		t.showPopupAtTrayIcon(iconRect)
+	} else if !isInIcon && !isInPopup && wasHovering {
+		if t.popupWindow != nil {
+			t.popupWindow.ScheduleHide(300 * time.Millisecond)
+		}
+	}
+}
+
+// getTrayIconRect 获取托盘图标位置
+func (t *App) getTrayIconRect() *win.RECT {
+	type NOTIFYICONIDENTIFIER struct {
+		CbSize   uint32
+		HWnd     win.HWND
+		UID      uint32
+		GuidItem [16]byte
+	}
+
+	shell32 := syscall.NewLazyDLL("shell32.dll")
+	getRect := shell32.NewProc("Shell_NotifyIconGetRect")
+
+	nii := NOTIFYICONIDENTIFIER{
+		CbSize: uint32(unsafe.Sizeof(NOTIFYICONIDENTIFIER{})),
+		HWnd:   t.mainWindow.Handle(),
+		UID:    0,
+	}
+
+	var rect win.RECT
+	ret, _, _ := getRect.Call(
+		uintptr(unsafe.Pointer(&nii)),
+		uintptr(unsafe.Pointer(&rect)),
+	)
+
+	if ret != 0 {
+		return t.getTrayIconRectFallback()
+	}
+	return &rect
+}
+
+// getTrayDPI 获取系统托盘的 DPI (Windows 11)
+func (t *App) getTrayDPI() int {
+	shellTray := win.FindWindow(syscall.StringToUTF16Ptr("Shell_TrayWnd"), nil)
+	if shellTray == 0 {
+		return 96
+	}
+
+	user32 := syscall.NewLazyDLL("user32.dll")
+	getDpiForWindow := user32.NewProc("GetDpiForWindow")
+	dpi, _, _ := getDpiForWindow.Call(uintptr(shellTray))
+	if dpi == 0 {
+		return 96
+	}
+	return int(dpi)
+}
+
+// getTrayIconRectFallback 备用方案：获取任务栏位置
+func (t *App) getTrayIconRectFallback() *win.RECT {
+	// 找到任务栏窗口
+	shellTray := win.FindWindow(
+		syscall.StringToUTF16Ptr("Shell_TrayWnd"),
+		nil,
+	)
+	if shellTray == 0 {
+		return nil
+	}
+
+	var rect win.RECT
+	if !win.GetWindowRect(shellTray, &rect) {
+		return nil
+	}
+
+	// 估算托盘图标位置（通常在任务栏右侧）
+	return &win.RECT{
+		Left:   rect.Right - 100,
+		Top:    rect.Top,
+		Right:  rect.Right - 50,
+		Bottom: rect.Bottom,
+	}
+}
+
+// showPopupAtTrayIcon 在托盘图标位置显示悬浮窗口
+func (t *App) showPopupAtTrayIcon(iconRect *win.RECT) {
+	if t.popupWindow == nil {
+		return
+	}
+
+	x := int((iconRect.Left + iconRect.Right) / 2)
+	y := int(iconRect.Top)
+
+	t.popupWindow.UpdateSessions(t.statuses)
+	t.popupWindow.ShowAt(x, y)
+}
+
+// togglePopup 切换悬浮窗口显示状态
+func (t *App) togglePopup() {
+	// 未连接时不显示弹窗
+	if t.connectedServer == "" || t.popupWindow == nil {
+		return
+	}
+
+	if t.popupWindow.IsVisible() {
+		t.popupWindow.Hide()
+	} else {
+		iconRect := t.getTrayIconRect()
+		if iconRect != nil {
+			t.showPopupAtTrayIcon(iconRect)
+		}
+	}
 }
 
 // startAnimation 启动动画
@@ -163,7 +403,7 @@ func (t *App) startAnimation() {
 					frames = icons.RunningLightFrames
 				}
 				frame := t.animFrame % len(frames)
-				systray.SetIcon(frames[frame])
+				t.setIconData(frames[frame])
 				t.animFrame++
 				t.animMu.Unlock()
 			case <-t.animStopCh:
@@ -191,6 +431,26 @@ func (t *App) stopAnimation() {
 	}
 }
 
+// setIconData 设置图标数据
+func (t *App) setIconData(data []byte) {
+	// 直接使用 ICO 数据创建图标，让 Windows 自动选择最佳尺寸
+	icon, err := createIconFromICO(data)
+	if err != nil {
+		logger.Error("Failed to create icon: %v", err)
+		return
+	}
+	// 释放旧图标资源
+	oldIcon := t.notifyIcon.Icon()
+	if err := t.notifyIcon.SetIcon(icon); err != nil {
+		logger.Error("Failed to set icon: %v", err)
+		icon.Dispose()
+		return
+	}
+	if oldIcon != nil {
+		oldIcon.Dispose()
+	}
+}
+
 // setIcon 设置图标
 func (t *App) setIcon(name string) {
 	if t.currentIcon == name {
@@ -214,16 +474,16 @@ func (t *App) applyIcon(name string) {
 	case "disconnected":
 		t.stopAnimation()
 		if t.isDarkMode {
-			systray.SetIcon(icons.DisconnectedDark)
+			t.setIconData(icons.DisconnectedDark)
 		} else {
-			systray.SetIcon(icons.DisconnectedLight)
+			t.setIconData(icons.DisconnectedLight)
 		}
 	case "input-needed":
 		t.stopAnimation()
 		if t.isDarkMode {
-			systray.SetIcon(icons.InputNeededDark)
+			t.setIconData(icons.InputNeededDark)
 		} else {
-			systray.SetIcon(icons.InputNeededLight)
+			t.setIconData(icons.InputNeededLight)
 		}
 	case "running":
 		t.startAnimation()
@@ -243,45 +503,46 @@ func (t *App) SetServers(servers []config.ServerConfig) {
 		return
 	}
 
-	t.mStatus.SetTitle("请选择服务器")
-	systray.SetTooltip("Claude Code Status Monitor\n\n请从菜单选择要连接的服务器")
+	t.mStatus.SetText("请选择服务器")
+	t.notifyIcon.SetToolTip("Claude Code Status - 请选择服务器")
 
-	// 创建服务器子菜单项（三级菜单）
+	// 创建服务器子菜单项
 	t.serverMenuItems = make([]*serverMenuItem, len(servers))
 	for i, server := range servers {
 		item := &serverMenuItem{server: server}
 
 		// 创建服务器子菜单
-		item.menuItem = t.mConnectionMenu.AddSubMenuItem(server.Name, fmt.Sprintf("连接到 %s", server.Host))
+		item.subMenu, _ = walk.NewMenu()
+		item.menuItem = walk.NewMenuAction(item.subMenu)
+		item.menuItem.SetText(server.Name)
+		t.connectionMenu.Actions().Add(item.menuItem)
 
 		// 添加操作子菜单
-		item.mConnect = item.menuItem.AddSubMenuItem("连接", "连接到此服务器")
-		item.mDisconnect = item.menuItem.AddSubMenuItem("断开连接", "断开此服务器连接")
-		item.mDisconnect.Hide() // 初始隐藏断开选项
+		item.mConnect = walk.NewAction()
+		item.mConnect.SetText("连接")
+		// 使用 item.server 避免闭包捕获循环变量问题
+		item.mConnect.Triggered().Attach(func() {
+			t.mStatus.SetText("正在连接...")
+			select {
+			case t.serverSelectCh <- item.server:
+			default:
+			}
+		})
+		item.subMenu.Actions().Add(item.mConnect)
+
+		item.mDisconnect = walk.NewAction()
+		item.mDisconnect.SetText("断开连接")
+		item.mDisconnect.SetVisible(false)
+		item.mDisconnect.Triggered().Attach(func() {
+			t.mStatus.SetText("正在断开...")
+			select {
+			case t.disconnectCh <- struct{}{}:
+			default:
+			}
+		})
+		item.subMenu.Actions().Add(item.mDisconnect)
 
 		t.serverMenuItems[i] = item
-
-		// 监听点击事件
-		go func(srv config.ServerConfig, mi *serverMenuItem) {
-			for {
-				select {
-				case <-mi.mConnect.ClickedCh:
-					t.mStatus.SetTitle("正在连接...")
-					select {
-					case t.serverSelectCh <- srv:
-					default:
-					}
-				case <-mi.mDisconnect.ClickedCh:
-					t.mStatus.SetTitle("正在断开...")
-					select {
-					case t.disconnectCh <- struct{}{}:
-					default:
-					}
-				case <-t.quitCh:
-					return
-				}
-			}
-		}(server, item)
 	}
 }
 
@@ -289,15 +550,13 @@ func (t *App) SetServers(servers []config.ServerConfig) {
 func (t *App) updateServerMenus() {
 	for _, item := range t.serverMenuItems {
 		if item.server.Name == t.connectedServer {
-			// 当前连接的服务器
-			item.menuItem.SetTitle("✓ " + item.server.Name + " (已连接)")
-			item.mConnect.SetTitle("重新连接")
-			item.mDisconnect.Show()
+			item.menuItem.SetText("✓ " + item.server.Name + " (已连接)")
+			item.mConnect.SetText("重新连接")
+			item.mDisconnect.SetVisible(true)
 		} else {
-			// 未连接的服务器
-			item.menuItem.SetTitle(item.server.Name)
-			item.mConnect.SetTitle("连接")
-			item.mDisconnect.Hide()
+			item.menuItem.SetText(item.server.Name)
+			item.mConnect.SetText("连接")
+			item.mDisconnect.SetVisible(false)
 		}
 	}
 }
@@ -331,23 +590,20 @@ func (t *App) UpdateStatus(statuses []monitor.ProjectStatus) {
 func (t *App) updateStatus(statuses []monitor.ProjectStatus) {
 	now := time.Now().Unix()
 
-	// 过滤掉 stopped 状态和超时的实例，同时更新 working 开始时间
+	// 过滤掉 stopped 状态和超时的实例
 	filtered := make([]monitor.ProjectStatus, 0, len(statuses))
 	activeProjects := make(map[string]bool)
 
 	for _, s := range statuses {
-		// 使用 session_id 作为唯一标识，如果没有则退回到 project
 		sessionKey := s.SessionId
 		if sessionKey == "" {
 			sessionKey = s.Project
 		}
 
-		// 跳过已停止的会话，并清除其计时
 		if s.Status == "stopped" {
 			delete(t.workingStartTimes, sessionKey)
 			continue
 		}
-		// 跳过超时的项目（statusTimeout > 0 时启用）
 		if t.statusTimeout > 0 && now-s.UpdatedAt > t.statusTimeout {
 			delete(t.workingStartTimes, sessionKey)
 			continue
@@ -355,21 +611,17 @@ func (t *App) updateStatus(statuses []monitor.ProjectStatus) {
 
 		activeProjects[sessionKey] = true
 
-		// 更新 working 开始时间
 		if s.Status == "working" {
-			// 如果之前没有记录开始时间，使用服务器的 updated_at 作为开始时间
 			if _, exists := t.workingStartTimes[sessionKey]; !exists {
 				t.workingStartTimes[sessionKey] = s.UpdatedAt
 			}
 		} else {
-			// idle 状态清除计时
 			delete(t.workingStartTimes, sessionKey)
 		}
 
 		filtered = append(filtered, s)
 	}
 
-	// 清理不再存在的会话
 	for sessionKey := range t.workingStartTimes {
 		if !activeProjects[sessionKey] {
 			delete(t.workingStartTimes, sessionKey)
@@ -394,13 +646,9 @@ func (t *App) updateStatus(statuses []monitor.ProjectStatus) {
 		t.setIcon("input-needed")
 	}
 
-	// 更新 Tooltip 和状态菜单
-	tooltip := t.buildTooltip()
-	systray.SetTooltip(tooltip)
-
 	// 更新状态菜单项
 	if len(t.statuses) == 0 {
-		t.mStatus.SetTitle("已连接 - 无活动项目")
+		t.mStatus.SetText("已连接 - 无活动项目")
 	} else {
 		workingCount := 0
 		for _, s := range t.statuses {
@@ -409,70 +657,19 @@ func (t *App) updateStatus(statuses []monitor.ProjectStatus) {
 			}
 		}
 		if workingCount > 0 {
-			t.mStatus.SetTitle(fmt.Sprintf("运行中 (%d 个项目)", workingCount))
+			t.mStatus.SetText(fmt.Sprintf("运行中 (%d 个项目)", workingCount))
 		} else {
-			t.mStatus.SetTitle(fmt.Sprintf("等待输入 (%d 个项目)", len(t.statuses)))
+			t.mStatus.SetText(fmt.Sprintf("等待输入 (%d 个项目)", len(t.statuses)))
 		}
+	}
+
+	// 更新悬浮窗口
+	if t.popupWindow != nil {
+		t.popupWindow.UpdateSessions(filtered)
 	}
 }
 
-// buildTooltip 构建 Tooltip 文本
-func (t *App) buildTooltip() string {
-	if len(t.statuses) == 0 {
-		return "Claude Code Status Monitor - 无活动项目"
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Claude Code Status:\n")
-
-	workingCount := 0
-	idleCount := 0
-
-	// 统计每个项目的会话数量，用于决定是否显示序号
-	projectSessionCount := make(map[string]int)
-	for _, s := range t.statuses {
-		projectSessionCount[s.Project]++
-	}
-
-	// 记录每个项目已显示的会话序号
-	projectSessionIndex := make(map[string]int)
-
-	for _, s := range t.statuses {
-		// 使用 session_id 作为唯一标识
-		sessionKey := s.SessionId
-		if sessionKey == "" {
-			sessionKey = s.Project
-		}
-
-		// 决定显示名称（同一项目多会话时显示序号）
-		displayName := s.ProjectName
-		if projectSessionCount[s.Project] > 1 {
-			projectSessionIndex[s.Project]++
-			displayName = fmt.Sprintf("%s #%d", s.ProjectName, projectSessionIndex[s.Project])
-		}
-
-		if s.Status == "working" {
-			workingCount++
-			// working 状态显示运行时间（从开始时间算起）
-			if startTime, exists := t.workingStartTimes[sessionKey]; exists {
-				duration := time.Since(time.Unix(startTime, 0))
-				fmt.Fprintf(&sb, "● %s (%s)\n", displayName, formatDuration(duration))
-			} else {
-				fmt.Fprintf(&sb, "● %s\n", displayName)
-			}
-		} else {
-			idleCount++
-			// idle 状态不显示计时
-			fmt.Fprintf(&sb, "○ %s\n", displayName)
-		}
-	}
-
-	fmt.Fprintf(&sb, "\n运行中: %d | 等待: %d", workingCount, idleCount)
-
-	return sb.String()
-}
-
-// formatDuration 格式化时间间隔（显示精确时间如 1m30s, 2h15m）
+// formatDuration 格式化时间间隔
 func formatDuration(d time.Duration) string {
 	totalSeconds := int(d.Seconds())
 
@@ -510,30 +707,30 @@ func (t *App) ServerSelectChan() <-chan config.ServerConfig {
 // SetConnecting 设置正在连接状态
 func (t *App) SetConnecting(msg string) {
 	t.setIcon("disconnected")
-	systray.SetTooltip("Claude Code Status Monitor - 正在连接...\n" + msg)
-	t.mStatus.SetTitle("正在连接 - " + msg)
+	t.notifyIcon.SetToolTip("Claude Code Status - 正在连接...")
+	t.mStatus.SetText("正在连接 - " + msg)
 }
 
 // SetConnected 设置连接状态
 func (t *App) SetConnected(connected bool, msg string) {
 	if connected {
 		t.setIcon("input-needed")
-		systray.SetTooltip("Claude Code Status Monitor - 已连接\n" + msg)
-		t.mStatus.SetTitle("已连接 - " + msg)
+		t.notifyIcon.SetToolTip("") // 已连接时不显示 tooltip，使用悬浮卡片
+		t.mStatus.SetText("已连接 - " + msg)
 		t.connectedServer = msg
 		t.updateServerMenus()
 	} else {
 		t.setIcon("disconnected")
-		systray.SetTooltip("Claude Code Status Monitor - " + msg)
-		t.mStatus.SetTitle(msg)
+		t.notifyIcon.SetToolTip("Claude Code Status - " + msg)
+		t.mStatus.SetText(msg)
 	}
 }
 
 // SetDisconnected 设置用户主动断开状态
 func (t *App) SetDisconnected() {
 	t.setIcon("disconnected")
-	t.mStatus.SetTitle("已断开连接")
-	systray.SetTooltip("Claude Code Status Monitor - 已断开连接")
+	t.mStatus.SetText("已断开连接")
+	t.notifyIcon.SetToolTip("Claude Code Status - 已断开连接")
 	t.connectedServer = ""
 	t.updateServerMenus()
 }
@@ -546,27 +743,23 @@ func (t *App) SetError(errType string, msg string) {
 	switch errType {
 	case "not_configured":
 		statusMsg = "服务端未配置"
-		systray.SetTooltip("Claude Code Status Monitor\n\n服务端未配置，请在服务器上运行:\ncd server && ./install.sh")
 	case "connection_failed":
 		statusMsg = "连接失败"
-		systray.SetTooltip("Claude Code Status Monitor - 连接失败\n" + msg)
 	case "session_error":
 		statusMsg = "会话错误"
-		systray.SetTooltip("Claude Code Status Monitor - 会话错误\n" + msg)
 	case "no_config":
 		statusMsg = "未配置"
-		systray.SetTooltip("Claude Code Status Monitor\n\n请选择要连接的服务器，或创建 config.yaml")
 	default:
 		statusMsg = msg
-		systray.SetTooltip("Claude Code Status Monitor - " + msg)
 	}
 
-	t.mStatus.SetTitle(statusMsg)
+	t.notifyIcon.SetToolTip("Claude Code Status - " + statusMsg)
+	t.mStatus.SetText(statusMsg)
 }
 
 // ShowServerSelection 显示服务器选择提示
 func (t *App) ShowServerSelection() {
 	t.setIcon("disconnected")
-	t.mStatus.SetTitle("请选择服务器")
-	systray.SetTooltip("Claude Code Status Monitor\n\n请从菜单选择要连接的服务器")
+	t.mStatus.SetText("请选择服务器")
+	t.notifyIcon.SetToolTip("Claude Code Status - 请选择服务器")
 }
