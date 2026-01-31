@@ -58,9 +58,14 @@ type App struct {
 
 	// 动画相关
 	animMu      sync.Mutex
+	animWg      sync.WaitGroup
 	animRunning bool
 	animStopCh  chan struct{}
 	animFrame   int
+
+	// 图标缓存（避免每帧重复创建）
+	iconCache     map[string]*walk.Icon
+	iconCacheMu   sync.Mutex
 
 	// 状态超时（秒），0 或负数表示禁用
 	statusTimeout int64
@@ -89,6 +94,7 @@ func NewApp() *App {
 		isDarkMode:        IsDarkMode(),
 		animFrame:         0,
 		workingStartTimes: make(map[string]int64),
+		iconCache:         make(map[string]*walk.Icon),
 	}
 }
 
@@ -140,6 +146,14 @@ func (t *App) Run(onReady func(), onQuit func()) {
 		t.popupWindow.Dispose()
 	}
 	t.notifyIcon.Dispose()
+
+	// 清理图标缓存
+	t.iconCacheMu.Lock()
+	for _, icon := range t.iconCache {
+		icon.Dispose()
+	}
+	t.iconCache = nil
+	t.iconCacheMu.Unlock()
 
 	if onQuit != nil {
 		onQuit()
@@ -210,6 +224,7 @@ func (t *App) setupContextMenu() {
 	quitAction := walk.NewAction()
 	quitAction.SetText("退出")
 	quitAction.Triggered().Attach(func() {
+		t.stopAnimation() // 先停止动画，等待 goroutine 退出
 		close(t.quitCh)
 		walk.App().Exit(0)
 	})
@@ -386,7 +401,9 @@ func (t *App) startAnimation() {
 	t.animStopCh = make(chan struct{})
 	t.animFrame = 0
 
+	t.animWg.Add(1)
 	go func() {
+		defer t.animWg.Done()
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 
@@ -418,9 +435,8 @@ func (t *App) startAnimation() {
 // stopAnimation 停止动画
 func (t *App) stopAnimation() {
 	t.animMu.Lock()
-	defer t.animMu.Unlock()
-
 	if !t.animRunning {
+		t.animMu.Unlock()
 		return
 	}
 
@@ -429,26 +445,52 @@ func (t *App) stopAnimation() {
 		close(t.animStopCh)
 		t.animStopCh = nil
 	}
+	t.animMu.Unlock()
+
+	// 等待动画 goroutine 退出
+	t.animWg.Wait()
 }
 
 // setIconData 设置图标数据
 func (t *App) setIconData(data []byte) {
-	// 直接使用 ICO 数据创建图标，让 Windows 自动选择最佳尺寸
-	icon, err := createIconFromICO(data)
-	if err != nil {
-		logger.Error("Failed to create icon: %v", err)
+	// 检查是否正在退出
+	select {
+	case <-t.quitCh:
 		return
+	default:
 	}
-	// 释放旧图标资源
-	oldIcon := t.notifyIcon.Icon()
-	if err := t.notifyIcon.SetIcon(icon); err != nil {
-		logger.Error("Failed to set icon: %v", err)
-		icon.Dispose()
-		return
+
+	// 使用数据地址作为缓存 key（动画帧是固定数组）
+	cacheKey := fmt.Sprintf("%p", &data[0])
+
+	t.iconCacheMu.Lock()
+	icon, cached := t.iconCache[cacheKey]
+	if !cached {
+		var err error
+		icon, err = createIconFromICO(data)
+		if err != nil {
+			t.iconCacheMu.Unlock()
+			logger.Error("Failed to create icon: %v", err)
+			return
+		}
+		t.iconCache[cacheKey] = icon
 	}
-	if oldIcon != nil {
-		oldIcon.Dispose()
-	}
+	t.iconCacheMu.Unlock()
+
+	// 必须在主线程执行 GUI 操作
+	t.mainWindow.Synchronize(func() {
+		// 再次检查是否正在退出
+		select {
+		case <-t.quitCh:
+			return
+		default:
+		}
+
+		// 使用缓存的图标，不释放（会被复用）
+		if err := t.notifyIcon.SetIcon(icon); err != nil {
+			logger.Error("Failed to set icon: %v", err)
+		}
+	})
 }
 
 // setIcon 设置图标

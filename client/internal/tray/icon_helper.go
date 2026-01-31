@@ -5,11 +5,13 @@ package tray
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -17,20 +19,12 @@ import (
 	"github.com/lxn/win"
 )
 
-// createIconFromICO 直接从 ICO 数据创建图标（保持原始质量）
+// 临时文件计数器，用于生成唯一文件名
+var tempFileCounter uint64
+
+// createIconFromICO 从 ICO 数据创建图标
 func createIconFromICO(data []byte) (*walk.Icon, error) {
-	// 使用 Windows API 直接从内存加载 ICO
-	user32 := syscall.NewLazyDLL("user32.dll")
-	createIconFromResourceEx := user32.NewProc("CreateIconFromResourceEx")
-
-	// ICO 文件头：6 字节
-	// 目录条目：每个 16 字节
 	if len(data) < 6 {
-		return createFallbackIcon()
-	}
-
-	imageCount := int(binary.LittleEndian.Uint16(data[4:6]))
-	if imageCount == 0 {
 		return createFallbackIcon()
 	}
 
@@ -38,82 +32,13 @@ func createIconFromICO(data []byte) (*walk.Icon, error) {
 	cxIcon := int(win.GetSystemMetrics(win.SM_CXSMICON))
 	cyIcon := int(win.GetSystemMetrics(win.SM_CYSMICON))
 
-	// 找到最接近系统托盘尺寸的图标
-	var bestEntry struct {
-		width, height uint8
-		offset, size  uint32
-	}
-	bestDiff := int(^uint(0) >> 1) // max int
+	// 使用唯一的临时文件名避免竞争
+	counter := atomic.AddUint64(&tempFileCounter, 1)
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("claude-status-icon-%d.ico", counter))
 
-	for i := 0; i < imageCount && 6+i*16+16 <= len(data); i++ {
-		entryOffset := 6 + i*16
-		w := int(data[entryOffset])
-		h := int(data[entryOffset+1])
-		if w == 0 {
-			w = 256
-		}
-		if h == 0 {
-			h = 256
-		}
-
-		// 选择最接近但不小于系统尺寸的图标
-		diff := (w - cxIcon) + (h - cyIcon)
-		if diff >= 0 && diff < bestDiff {
-			bestDiff = diff
-			bestEntry.width = data[entryOffset]
-			bestEntry.height = data[entryOffset+1]
-			bestEntry.size = binary.LittleEndian.Uint32(data[entryOffset+8 : entryOffset+12])
-			bestEntry.offset = binary.LittleEndian.Uint32(data[entryOffset+12 : entryOffset+16])
-		}
-	}
-
-	if bestEntry.size == 0 || int(bestEntry.offset)+int(bestEntry.size) > len(data) {
-		return createFallbackIcon()
-	}
-
-	// 提取图标数据
-	iconData := data[bestEntry.offset : bestEntry.offset+bestEntry.size]
-
-	// 检查是否是 PNG 格式
-	isPNG := len(iconData) > 8 && iconData[0] == 0x89 && iconData[1] == 'P' && iconData[2] == 'N' && iconData[3] == 'G'
-
-	var hIcon win.HICON
-	if isPNG {
-		// PNG 格式需要写入临时文件
-		return createIconFromTempFile(data, cxIcon, cyIcon)
-	}
-
-	// BMP/DIB 格式，使用 CreateIconFromResourceEx
-	ret, _, _ := createIconFromResourceEx.Call(
-		uintptr(unsafe.Pointer(&iconData[0])),
-		uintptr(bestEntry.size),
-		uintptr(1), // TRUE = icon
-		uintptr(0x00030000), // version
-		uintptr(cxIcon),
-		uintptr(cyIcon),
-		uintptr(0), // LR_DEFAULTCOLOR
-	)
-
-	if ret == 0 {
-		return createIconFromTempFile(data, cxIcon, cyIcon)
-	}
-	hIcon = win.HICON(ret)
-
-	icon, err := walk.NewIconFromHICON(hIcon)
-	if err != nil {
-		win.DestroyIcon(hIcon)
-		return createFallbackIcon()
-	}
-	return icon, nil
-}
-
-// createIconFromTempFile 使用临时文件加载图标
-func createIconFromTempFile(data []byte, width, height int) (*walk.Icon, error) {
-	tmpFile := filepath.Join(os.TempDir(), "claude-status-icon.ico")
 	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
 		return createFallbackIcon()
 	}
-	defer os.Remove(tmpFile)
 
 	// 使用 LoadImage API 加载指定尺寸的图标
 	user32 := syscall.NewLazyDLL("user32.dll")
@@ -124,24 +49,27 @@ func createIconFromTempFile(data []byte, width, height int) (*walk.Icon, error) 
 		0, // hInstance
 		uintptr(unsafe.Pointer(pathPtr)),
 		uintptr(1), // IMAGE_ICON
-		uintptr(width),
-		uintptr(height),
+		uintptr(cxIcon),
+		uintptr(cyIcon),
 		uintptr(0x00000010), // LR_LOADFROMFILE
 	)
 
+	// 加载完成后立即删除临时文件
+	os.Remove(tmpFile)
+
 	if ret == 0 {
-		// 回退到 walk 的方法
-		return walk.NewIconFromFile(tmpFile)
+		return createFallbackIcon()
 	}
 
 	hIcon := win.HICON(ret)
-	icon, err := walk.NewIconFromHICON(hIcon)
+	icon, err := walk.NewIconFromHICONForDPI(hIcon, 96)
 	if err != nil {
 		win.DestroyIcon(hIcon)
-		return walk.NewIconFromFile(tmpFile)
+		return createFallbackIcon()
 	}
 	return icon, nil
 }
+
 
 // createFallbackIcon 创建后备图标
 func createFallbackIcon() (*walk.Icon, error) {
