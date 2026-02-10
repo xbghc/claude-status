@@ -41,21 +41,17 @@ if (-not (Test-Path "go.mod")) {
     exit 1
 }
 
-function Ensure-Tool {
-    param([string]$Name, [string]$InstallCmd, [string]$Description)
+function Require-Tool {
+    param([string]$Name, [string]$Description)
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        Write-Host "正在安装 $Description ..." -ForegroundColor Yellow
-        Invoke-Expression $InstallCmd
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "安装 $Description 失败"
-            exit 1
-        }
+        Write-Error "缺少必要工具: $Name ($Description)，请先安装后再运行"
+        exit 1
     }
 }
 
 function Build-Icons {
     Write-Host "=== 生成图标 ===" -ForegroundColor Cyan
-    Ensure-Tool "magick" "winget install ImageMagick.ImageMagick -s winget --accept-package-agreements --accept-source-agreements" "ImageMagick"
+    Require-Tool "magick" "ImageMagick"
 
     if (-not (Test-Path $IconsDir)) { New-Item -ItemType Directory -Path $IconsDir -Force | Out-Null }
 
@@ -72,7 +68,9 @@ function Build-Icons {
         Write-Host "  - $($icon.Name).ico"
         $tmpPng = "$IconsDir\$($icon.Name)-tmp.png"
         & magick -background none -density 384 -resize 256x256 $icon.Svg $tmpPng
+        if ($LASTEXITCODE -ne 0) { throw "magick SVG->PNG 失败: $($icon.Name)" }
         & magick $tmpPng -define icon:auto-resize="256,48,32,24,20,16" "$IconsDir\$($icon.Name).ico"
+        if ($LASTEXITCODE -ne 0) { throw "magick PNG->ICO 失败: $($icon.Name)" }
         Remove-Item $tmpPng -Force -ErrorAction SilentlyContinue
     }
 
@@ -98,7 +96,9 @@ function Build-Icons {
 </svg>
 "@ | Set-Content -Path $frameSvg -Encoding UTF8
             & magick -background none -density 384 -resize 256x256 $frameSvg $framePng
+            if ($LASTEXITCODE -ne 0) { throw "magick SVG->PNG 失败: running-$($theme.Name)-frame${i}" }
             & magick $framePng -define icon:auto-resize="256,48,32,24,20,16" "$IconsDir\running-$($theme.Name)-frame${i}.ico"
+            if ($LASTEXITCODE -ne 0) { throw "magick PNG->ICO 失败: running-$($theme.Name)-frame${i}" }
         }
         Remove-Item "$IconsDir\frame.svg", "$IconsDir\frame.png" -Force -ErrorAction SilentlyContinue
     }
@@ -108,7 +108,7 @@ function Build-Icons {
 
 function Build-WinRes {
     Write-Host "=== 生成 Windows 资源 ===" -ForegroundColor Cyan
-    Ensure-Tool "go-winres" "go install github.com/tc-hib/go-winres@latest" "go-winres"
+    Require-Tool "go-winres" "go-winres (go install github.com/tc-hib/go-winres@latest)"
 
     # 生成 winres 所需的 icon.png（从 ICO 转换）
     $iconPng = "$WinResDir\icon.png"
