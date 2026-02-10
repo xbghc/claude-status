@@ -28,7 +28,7 @@ jobs:
 
           if [ -z "$LATEST_TAG" ]; then
             # No tags yet - read current version from version.go
-            CURRENT=$(grep -oP 'Version = "\K[^"]+' client/internal/version/version.go)
+            CURRENT=$(sed -n 's/^const Version = "\(.*\)"/\1/p' client/internal/version/version.go)
             COMMIT_RANGE="HEAD"
           else
             CURRENT="${LATEST_TAG#v}"
