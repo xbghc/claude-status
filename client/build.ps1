@@ -44,8 +44,7 @@ if (-not (Test-Path "go.mod")) {
 function Require-Tool {
     param([string]$Name, [string]$Description)
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        Write-Error "缺少必要工具: $Name ($Description)，请先安装后再运行"
-        exit 1
+        throw "缺少必要工具: $Name ($Description)，请先安装后再运行"
     }
 }
 
