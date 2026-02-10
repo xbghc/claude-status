@@ -10,22 +10,23 @@ import (
 	"github.com/lxn/walk"
 )
 
-// SessionItem 会话项
-type SessionItem struct {
-	ProjectName string
-	IsWorking   bool
+// ProjectGroup 按项目分组的会话统计
+type ProjectGroup struct {
+	ProjectName string // 项目显示名
+	Running     int    // 正在运行（working）的会话数
+	Total       int    // 总会话数
 }
 
 // SessionList 会话列表（极简风格）
 type SessionList struct {
 	widget *walk.CustomWidget
-	items  []*SessionItem
+	groups []*ProjectGroup
 }
 
 // NewSessionList 创建会话列表
 func NewSessionList(parent walk.Container) (*SessionList, error) {
 	sl := &SessionList{
-		items: make([]*SessionItem, 0),
+		groups: make([]*ProjectGroup, 0),
 	}
 
 	var err error
@@ -54,26 +55,26 @@ func (sl *SessionList) paint(canvas *walk.Canvas, updateBounds walk.Rectangle) e
 	defer bgBrush.Dispose()
 	canvas.FillRectanglePixels(bgBrush, bounds)
 
-	// 绘制列表项
-	for i, item := range sl.items {
-		sl.paintItem(canvas, item, i)
+	// 绘制分组列表项
+	for i, group := range sl.groups {
+		sl.paintGroup(canvas, group, i)
 	}
 
 	// 空状态
-	if len(sl.items) == 0 {
+	if len(sl.groups) == 0 {
 		sl.paintEmpty(canvas, bounds)
 	}
 
 	return nil
 }
 
-// paintItem 绘制单个列表项
-func (sl *SessionList) paintItem(canvas *walk.Canvas, item *SessionItem, index int) {
+// paintGroup 绘制单个分组项
+func (sl *SessionList) paintGroup(canvas *walk.Canvas, group *ProjectGroup, index int) {
 	y := Window.Padding + index*Item.Height
 
-	// 状态颜色
+	// 状态颜色：有 running 会话则绿色，否则黄色
 	var dotColor walk.Color
-	if item.IsWorking {
+	if group.Running > 0 {
 		dotColor = Colors.Working
 	} else {
 		dotColor = Colors.Idle
@@ -92,21 +93,34 @@ func (sl *SessionList) paintItem(canvas *walk.Canvas, item *SessionItem, index i
 		X: dotX, Y: dotY, Width: Item.DotSize, Height: Item.DotSize,
 	})
 
-	// 绘制项目名称
+	// 字体
 	font, err := walk.NewFont(Fonts.Primary, Fonts.Size, 0)
 	if err != nil {
 		return
 	}
 	defer font.Dispose()
 
+	// 右侧计数文本 "a/b"
+	countText := fmt.Sprintf("%d/%d", group.Running, group.Total)
+	countWidth := Scale(36)
+	countRect := walk.Rectangle{
+		X:      Window.Width - Window.Padding - countWidth,
+		Y:      y,
+		Width:  countWidth,
+		Height: Item.Height,
+	}
+	canvas.DrawTextPixels(countText, font, Colors.TextMuted, countRect,
+		walk.TextRight|walk.TextVCenter|walk.TextSingleLine)
+
+	// 左侧项目名称
 	textX := dotX + Item.DotSize + Item.DotMargin
 	textRect := walk.Rectangle{
 		X:      textX,
 		Y:      y,
-		Width:  Window.Width - textX - Window.Padding,
+		Width:  countRect.X - textX - Item.DotMargin,
 		Height: Item.Height,
 	}
-	canvas.DrawTextPixels(item.ProjectName, font, Colors.TextPrimary, textRect,
+	canvas.DrawTextPixels(group.ProjectName, font, Colors.TextPrimary, textRect,
 		walk.TextLeft|walk.TextVCenter|walk.TextSingleLine|walk.TextEndEllipsis)
 }
 
@@ -132,41 +146,51 @@ func (sl *SessionList) Update(statuses []monitor.ProjectStatus) {
 		}
 	}
 
-	// 统计每个项目的会话数量
-	projectCount := make(map[string]int)
+	// 按项目目录分组统计
+	type groupStats struct {
+		name    string
+		running int
+		total   int
+	}
+	groupMap := make(map[string]*groupStats)
+	var groupOrder []string
+
 	for _, s := range filtered {
-		projectCount[s.Project]++
+		g, exists := groupMap[s.Project]
+		if !exists {
+			g = &groupStats{name: s.ProjectName}
+			groupMap[s.Project] = g
+			groupOrder = append(groupOrder, s.Project)
+		}
+		g.total++
+		if s.Status == "working" {
+			g.running++
+		}
 	}
 
-	// 构建列表项
-	projectIndex := make(map[string]int)
-	items := make([]*SessionItem, 0, len(filtered))
-
-	for _, s := range filtered {
-		displayName := s.ProjectName
-		if projectCount[s.Project] > 1 {
-			projectIndex[s.Project]++
-			displayName = fmt.Sprintf("%s #%d", s.ProjectName, projectIndex[s.Project])
-		}
-
-		items = append(items, &SessionItem{
-			ProjectName: displayName,
-			IsWorking:   s.Status == "working",
+	// 按出现顺序构建分组列表
+	groups := make([]*ProjectGroup, 0, len(groupOrder))
+	for _, project := range groupOrder {
+		g := groupMap[project]
+		groups = append(groups, &ProjectGroup{
+			ProjectName: g.name,
+			Running:     g.running,
+			Total:       g.total,
 		})
 	}
 
-	sl.items = items
+	sl.groups = groups
 	sl.widget.Invalidate()
 }
 
-// GetItemCount 获取项目数量
+// GetItemCount 获取分组数量
 func (sl *SessionList) GetItemCount() int {
-	return len(sl.items)
+	return len(sl.groups)
 }
 
 // GetHeight 获取列表高度
 func (sl *SessionList) GetHeight() int {
-	return CalcWindowHeight(len(sl.items))
+	return CalcWindowHeight(len(sl.groups))
 }
 
 // SetSize 设置控件大小

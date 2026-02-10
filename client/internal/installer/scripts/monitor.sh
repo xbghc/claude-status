@@ -8,6 +8,52 @@
 
 SCRIPT_VERSION="__VERSION__"
 STATUS_DIR="$HOME/.claude-status"
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+
+# 清理函数：连接断开时移除 Hook 并清理状态文件
+cleanup() {
+    echo "[cleanup] Connection closed, removing hooks and status files..." >&2
+
+    # 移除 Claude Code settings 中与 status-hook.sh 相关的 Hook
+    if [ -f "$CLAUDE_SETTINGS" ] && command -v jq &> /dev/null; then
+        jq '
+            def remove_status_hooks:
+                if . == null then null
+                elif (. | length) == 0 then .
+                else [.[] | select(.hooks[0].command | contains("status-hook.sh") | not)]
+                end;
+
+            if .hooks then
+                .hooks.UserPromptSubmit = (.hooks.UserPromptSubmit | remove_status_hooks) |
+                .hooks.PostToolUse = (.hooks.PostToolUse | remove_status_hooks) |
+                .hooks.Stop = (.hooks.Stop | remove_status_hooks) |
+                .hooks.PermissionRequest = (.hooks.PermissionRequest | remove_status_hooks) |
+                .hooks.SessionStart = (.hooks.SessionStart | remove_status_hooks) |
+                .hooks.SessionEnd = (.hooks.SessionEnd | remove_status_hooks) |
+
+                # 清理空数组的 key
+                if .hooks.UserPromptSubmit == [] then del(.hooks.UserPromptSubmit) else . end |
+                if .hooks.PostToolUse == [] then del(.hooks.PostToolUse) else . end |
+                if .hooks.Stop == [] then del(.hooks.Stop) else . end |
+                if .hooks.PermissionRequest == [] then del(.hooks.PermissionRequest) else . end |
+                if .hooks.SessionStart == [] then del(.hooks.SessionStart) else . end |
+                if .hooks.SessionEnd == [] then del(.hooks.SessionEnd) else . end |
+
+                # 如果 hooks 对象为空则也删除
+                if .hooks == {} then del(.hooks) else . end
+            else .
+            end
+        ' "$CLAUDE_SETTINGS" > "$CLAUDE_SETTINGS.tmp" 2>/dev/null && mv -f "$CLAUDE_SETTINGS.tmp" "$CLAUDE_SETTINGS"
+        echo "[cleanup] Hooks removed from settings.json" >&2
+    fi
+
+    # 清理状态文件
+    rm -f "$STATUS_DIR"/*.json 2>/dev/null
+    echo "[cleanup] Status files cleaned up" >&2
+}
+
+# 捕获退出信号，执行清理
+trap cleanup EXIT HUP TERM INT
 
 # 检查 inotifywait 是否可用
 if ! command -v inotifywait &> /dev/null; then
