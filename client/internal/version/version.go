@@ -6,4 +6,4 @@ package version
 // - status-hook.sh 脚本逻辑
 // - install-remote.sh Hook 配置
 // - 通信协议（StatusMessage 结构）
-const Version = "0.1.8"
+const Version = "1.1.0"
