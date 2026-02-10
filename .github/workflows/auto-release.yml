@@ -1,0 +1,117 @@
+name: Auto Release on Merge
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  version-and-release:
+    # Skip version bump commits to prevent infinite loop
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version bump
+        id: bump
+        shell: bash
+        run: |
+          # Get latest tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -z "$LATEST_TAG" ]; then
+            # No tags yet - read current version from version.go
+            CURRENT=$(grep -oP 'Version = "\K[^"]+' client/internal/version/version.go)
+            COMMIT_RANGE="HEAD"
+          else
+            CURRENT="${LATEST_TAG#v}"
+            COMMIT_RANGE="${LATEST_TAG}..HEAD"
+          fi
+
+          # Get commit messages (excluding merge commits)
+          COMMITS=$(git log --no-merges --format="%s" $COMMIT_RANGE)
+
+          # Parse current version
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          # Determine bump type from conventional commits
+          # BREAKING CHANGE or type!: → major
+          # feat: → minor
+          # everything else → patch
+          BUMP="patch"
+          if echo "$COMMITS" | grep -qE "(^[a-z]+(\(.+\))?!:|BREAKING CHANGE)"; then
+            BUMP="major"
+          elif echo "$COMMITS" | grep -qE "^feat(\(.+\))?:"; then
+            BUMP="minor"
+          fi
+
+          # Calculate new version
+          case $BUMP in
+            major) NEW_VERSION="$((MAJOR+1)).0.0" ;;
+            minor) NEW_VERSION="${MAJOR}.$((MINOR+1)).0" ;;
+            patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH+1))" ;;
+          esac
+
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $CURRENT -> $NEW_VERSION ($BUMP)"
+
+      - name: Update version.go
+        shell: bash
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          sed -i "s/const Version = \".*\"/const Version = \"$NEW_VERSION\"/" client/internal/version/version.go
+
+      - name: Commit and tag
+        shell: bash
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add client/internal/version/version.go
+          git commit -m "chore: bump version to ${NEW_VERSION} [skip ci]"
+          git tag "v${NEW_VERSION}"
+          git push origin main "v${NEW_VERSION}"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install ImageMagick
+        run: choco install imagemagick -y --no-progress
+
+      - name: Install go-winres
+        run: go install github.com/tc-hib/go-winres@latest
+
+      - name: Install NSIS
+        run: |
+          choco install nsis -y --no-progress
+          echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
+
+      - name: Build
+        working-directory: client
+        run: .\build.ps1 -All
+
+      - name: Build Installers
+        working-directory: client/installer
+        run: |
+          makensis /DARCH=amd64 /DVERSION=${{ steps.bump.outputs.new_version }} /DEXE_PATH=..\build\claude-status-amd64.exe claude-status.nsi
+          makensis /DARCH=arm64 /DVERSION=${{ steps.bump.outputs.new_version }} /DEXE_PATH=..\build\claude-status-arm64.exe claude-status.nsi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.new_version }}
+          files: |
+            client/build/claude-status-amd64.exe
+            client/build/claude-status-arm64.exe
+            client/build/claude-status-amd64-setup.exe
+            client/build/claude-status-arm64-setup.exe
+          generate_release_notes: true
