@@ -59,7 +59,7 @@ Section "Claude Status Monitor" SecCore
   Rename "$INSTDIR\claude-status-${ARCH}.exe" "$INSTDIR\claude-status.exe"
 
   ; Example config
-  File /oname=config.example.yaml "..\..\config.example.yaml"
+  File /oname=config.example.yaml "..\config.example.yaml"
 
   ; Create uninstaller
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -106,7 +106,7 @@ SectionEnd
 ; ---- Auto Start (optional) ----
 Section "Start with Windows" SecAutoStart
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" \
-    "ClaudeStatusMonitor" '"$INSTDIR\claude-status.exe"'
+    "ClaudeStatusMonitor" '"$INSTDIR\claude-status.exe" -config "$INSTDIR\config.yaml"'
 SectionEnd
 
 ; ---- Section Descriptions ----
