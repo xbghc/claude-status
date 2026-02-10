@@ -66,7 +66,7 @@ function Build-Icons {
     foreach ($icon in $staticIcons) {
         Write-Host "  - $($icon.Name).ico"
         $tmpPng = "$IconsDir\$($icon.Name)-tmp.png"
-        & magick -background none -density 384 -resize 256x256 $icon.Svg $tmpPng
+        & magick -background none -density 384 $icon.Svg -resize 256x256 $tmpPng
         if ($LASTEXITCODE -ne 0) { throw "magick SVG->PNG 失败: $($icon.Name)" }
         & magick $tmpPng -define icon:auto-resize="256,48,32,24,20,16" "$IconsDir\$($icon.Name).ico"
         if ($LASTEXITCODE -ne 0) { throw "magick PNG->ICO 失败: $($icon.Name)" }
@@ -94,7 +94,7 @@ function Build-Icons {
   </g>
 </svg>
 "@ | Set-Content -Path $frameSvg -Encoding UTF8
-            & magick -background none -density 384 -resize 256x256 $frameSvg $framePng
+            & magick -background none -density 384 $frameSvg -resize 256x256 $framePng
             if ($LASTEXITCODE -ne 0) { throw "magick SVG->PNG 失败: running-$($theme.Name)-frame${i}" }
             & magick $framePng -define icon:auto-resize="256,48,32,24,20,16" "$IconsDir\running-$($theme.Name)-frame${i}.ico"
             if ($LASTEXITCODE -ne 0) { throw "magick PNG->ICO 失败: running-$($theme.Name)-frame${i}" }
