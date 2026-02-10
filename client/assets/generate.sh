@@ -23,7 +23,7 @@ generate_icon() {
     local svg=$2
 
     echo "  - ${name}.ico"
-    convert -background none -density 384 -resize 256x256 "$svg" "$OUT_DIR/${name}-tmp.png"
+    convert -background none -density 384 "$svg" -resize 256x256 "$OUT_DIR/${name}-tmp.png"
     convert "$OUT_DIR/${name}-tmp.png" -define icon:auto-resize="256,48,32,24,20,16" "$OUT_DIR/${name}.ico"
     rm -f "$OUT_DIR/${name}-tmp.png"
 }
@@ -47,7 +47,7 @@ for i in $(seq 0 $((FRAMES - 1))); do
   </g>
 </svg>
 EOF
-    convert -background none -density 384 -resize 256x256 "$OUT_DIR/frame.svg" "$OUT_DIR/frame.png"
+    convert -background none -density 384 "$OUT_DIR/frame.svg" -resize 256x256 "$OUT_DIR/frame.png"
     convert "$OUT_DIR/frame.png" -define icon:auto-resize="256,48,32,24,20,16" "$OUT_DIR/running-dark-frame${i}.ico"
 done
 
@@ -63,7 +63,7 @@ for i in $(seq 0 $((FRAMES - 1))); do
   </g>
 </svg>
 EOF
-    convert -background none -density 384 -resize 256x256 "$OUT_DIR/frame.svg" "$OUT_DIR/frame.png"
+    convert -background none -density 384 "$OUT_DIR/frame.svg" -resize 256x256 "$OUT_DIR/frame.png"
     convert "$OUT_DIR/frame.png" -define icon:auto-resize="256,48,32,24,20,16" "$OUT_DIR/running-light-frame${i}.ico"
 done
 
