@@ -27,9 +27,23 @@ jobs:
       - name: Install go-winres
         run: go install github.com/tc-hib/go-winres@latest
 
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
       - name: Build
         working-directory: client
         run: .\build.ps1 -All
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Installers
+        working-directory: client/installer
+        run: |
+          makensis /DARCH=amd64 /DVERSION=${{ steps.version.outputs.version }} /DEXE_PATH=..\build\claude-status-amd64.exe claude-status.nsi
+          makensis /DARCH=arm64 /DVERSION=${{ steps.version.outputs.version }} /DEXE_PATH=..\build\claude-status-arm64.exe claude-status.nsi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -37,4 +51,6 @@ jobs:
           files: |
             client/build/claude-status-amd64.exe
             client/build/claude-status-arm64.exe
+            client/build/claude-status-amd64-setup.exe
+            client/build/claude-status-arm64-setup.exe
           generate_release_notes: true
