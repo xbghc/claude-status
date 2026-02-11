@@ -159,9 +159,19 @@ Function .onGUIInit
   GetDlgItem $0 $HWNDPARENT 1256
   ShowWindow $0 ${SW_HIDE}
 
+  ; Resize the outer window so bottom buttons are not clipped
+  ; Default NSIS window (~503x399) is too short for our 450px inner area
+  System::Call "user32::GetSystemMetrics(i 0) i.r2"  ; SM_CXSCREEN
+  System::Call "user32::GetSystemMetrics(i 1) i.r3"  ; SM_CYSCREEN
+  IntOp $4 $2 - 520
+  IntOp $4 $4 / 2
+  IntOp $5 $3 - 490
+  IntOp $5 $5 / 2
+  System::Call "user32::SetWindowPos(p $HWNDPARENT, p 0, i $4, i $5, i 520, i 490, i 0x0004)"
+
   ; Resize the inner page area to fill the window
   GetDlgItem $0 $HWNDPARENT 1018
-  System::Call "user32::SetWindowPos(p $0, p 0, i 0, i 0, i 500, i 380, i 0x0014)"
+  System::Call "user32::SetWindowPos(p $0, p 0, i 0, i 0, i 500, i 450, i 0x0014)"
 FunctionEnd
 
 Function .onUserAbort
