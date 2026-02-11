@@ -1,0 +1,12 @@
+{
+  "product": "Claude Status Monitor",
+  "company": "xbghc",
+  "upgrade-code": "d4f7b8a2-3c1e-4f5a-9b2d-6e8f0a1c3d5e",
+  "files": {
+    "guid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "items": [
+      "build\\claude-status.exe",
+      "config.example.yaml"
+    ]
+  }
+}

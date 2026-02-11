@@ -89,5 +89,4 @@ jobs:
     uses: ./.github/workflows/build-and-release.yml
     with:
       version: ${{ needs.version-and-tag.outputs.new_version }}
-          generate_release_notes: true
 

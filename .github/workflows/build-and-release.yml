@@ -36,20 +36,25 @@ jobs:
       - name: Install go-winres
         run: go install github.com/tc-hib/go-winres@latest
 
-      - name: Install NSIS
+      - name: Install go-msi
+        run: go install github.com/mh-cbon/go-msi@latest
+
+      - name: Install WiX Toolset
         run: |
-          choco install nsis -y --no-progress
-          echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
+          choco install wixtoolset -y --no-progress
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
 
       - name: Build
         working-directory: client
         run: .\build.ps1 -All
 
-      - name: Build Installers
-        working-directory: client/installer
-        run: |
-          makensis /INPUTCHARSET UTF8 /DARCH=amd64 /DVERSION=${{ inputs.version }} /DEXE_PATH=..\build\claude-status-amd64.exe claude-status.nsi
-          makensis /INPUTCHARSET UTF8 /DARCH=arm64 /DVERSION=${{ inputs.version }} /DEXE_PATH=..\build\claude-status-arm64.exe claude-status.nsi
+      - name: Build MSI (amd64)
+        working-directory: client
+        run: .\build.ps1 -Msi -Arch amd64
+
+      - name: Build MSI (arm64)
+        working-directory: client
+        run: .\build.ps1 -Msi -Arch arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -58,6 +63,6 @@ jobs:
           files: |
             client/build/claude-status-amd64.exe
             client/build/claude-status-arm64.exe
-            client/build/claude-status-amd64-setup.exe
-            client/build/claude-status-arm64-setup.exe
+            client/build/claude-status-amd64-setup.msi
+            client/build/claude-status-arm64-setup.msi
           generate_release_notes: true

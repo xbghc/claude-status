@@ -4,6 +4,7 @@
 #   .\build.ps1 -Arch arm64  # 编译 arm64
 #   .\build.ps1 -Icons       # 生成图标（需要 ImageMagick）
 #   .\build.ps1 -All         # 图标 + winres + 编译 amd64 & arm64
+#   .\build.ps1 -Msi         # 生成 MSI 安装包（需要 go-msi + WiX）
 #   .\build.ps1 -Clean       # 清理构建产物
 
 param(
@@ -12,7 +13,8 @@ param(
     [switch]$Icons,
     [switch]$All,
     [switch]$Clean,
-    [switch]$WinRes
+    [switch]$WinRes,
+    [switch]$Msi
 )
 
 # 自动检测架构
@@ -179,6 +181,49 @@ function Clean-Build {
     Write-Host "清理完成" -ForegroundColor Green
 }
 
+function Get-AppVersion {
+    $versionFile = "internal\version\version.go"
+    $versionLine = Select-String -Path $versionFile -Pattern 'const Version = "([^"]+)"'
+    if (-not $versionLine) {
+        throw "无法从 $versionFile 读取版本号"
+    }
+    return $versionLine.Matches[0].Groups[1].Value
+}
+
+function Build-Msi {
+    param([string]$TargetArch)
+
+    Write-Host "=== 生成 MSI 安装包 ($TargetArch) ===" -ForegroundColor Cyan
+    Require-Tool "go-msi" "go-msi (go install github.com/mh-cbon/go-msi@latest)"
+
+    $appVersion = Get-AppVersion
+    Write-Host "  版本: $appVersion" -ForegroundColor Gray
+
+    # 确保 exe 已编译
+    $exeSrc = "$BuildDir\$AppName-$TargetArch.exe"
+    if (-not (Test-Path $exeSrc)) {
+        Write-Host "  exe 不存在，先编译..." -ForegroundColor Yellow
+        Build-Exe -TargetArch $TargetArch
+    }
+
+    # go-msi 会从 wix.json 中读取 files.items，需要确保 build/claude-status.exe 存在
+    $exeDst = "$BuildDir\$AppName.exe"
+    Copy-Item $exeSrc $exeDst -Force
+
+    # 将 go-msi arch 映射为 WiX arch
+    $msiArch = if ($TargetArch -eq "arm64") { "amd64" } else { $TargetArch }
+
+    $msiOutput = "$BuildDir\$AppName-$TargetArch-setup.msi"
+
+    & go-msi make --path wix.json --src templates --msi $msiOutput --version $appVersion --arch $msiArch
+    if ($LASTEXITCODE -ne 0) { throw "go-msi make 失败" }
+
+    # 清理临时的通用名 exe
+    Remove-Item $exeDst -Force -ErrorAction SilentlyContinue
+
+    Write-Host "输出: $msiOutput" -ForegroundColor Green
+}
+
 # 主逻辑
 if ($Clean) {
     Clean-Build
@@ -200,6 +245,11 @@ if ($Icons) {
 
 if ($WinRes) {
     Build-WinRes
+    exit 0
+}
+
+if ($Msi) {
+    Build-Msi -TargetArch $Arch
     exit 0
 }
 

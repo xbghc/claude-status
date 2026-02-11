@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+   <Product Id="*"
+            UpgradeCode="{{.UpgradeCode}}"
+            Name="{{.Product}}"
+            Version="{{.VersionOk}}"
+            Manufacturer="{{.Company}}"
+            Language="1033">
+
+      <Package InstallerVersion="300"
+               Compressed="yes"
+               InstallScope="perUser"
+               Description="{{.Product}} Installer" />
+
+      <Media Id="1" Cabinet="product.cab" EmbedCab="yes" />
+
+      <!-- Upgrade logic -->
+      <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+
+      <!-- Directory structure: per-user install to LocalAppData -->
+      <Directory Id="TARGETDIR" Name="SourceDir">
+         <Directory Id="LocalAppDataFolder">
+            <Directory Id="INSTALLDIR" Name="{{.Product}}">
+
+               <!-- Application files -->
+               {{if gt (.Files.Items | len) 0}}
+               <Component Id="ApplicationFiles" Guid="{{.Files.GUID}}">
+                  {{range $i, $e := .Files.Items}}
+                  <File Id="ApplicationFile{{$i}}" Source="{{$e}}" />
+                  {{end}}
+               </Component>
+               {{end}}
+
+               <!-- Autostart registry entry -->
+               <Component Id="AutoStartEntry" Guid="d4e5f6a7-b8c9-0123-defa-234567890123">
+                  <RegistryValue Root="HKCU"
+                     Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                     Name="ClaudeStatusMonitor"
+                     Type="string"
+                     Value="&quot;[INSTALLDIR]claude-status.exe&quot;" />
+                  <RegistryValue Root="HKCU"
+                     Key="Software\{{.Company}}\{{.Product}}"
+                     Name="autostart"
+                     Type="integer" Value="1" KeyPath="yes" />
+               </Component>
+
+            </Directory>
+         </Directory>
+      </Directory>
+
+      <!-- Close running instance before install/uninstall -->
+      <util:CloseApplication Id="CloseApp"
+                             Target="claude-status.exe"
+                             RebootPrompt="no"
+                             TerminateProcess="1" />
+
+      <InstallExecuteSequence>
+         <Custom Action="WixCloseApplications" Before="InstallInitialize" />
+      </InstallExecuteSequence>
+
+      <!-- Features -->
+      <Feature Id="MainFeature" Level="1" Title="{{.Product}}" Description="Core application files">
+         {{if gt (.Files.Items | len) 0}}
+         <ComponentRef Id="ApplicationFiles" />
+         {{end}}
+         <ComponentRef Id="AutoStartEntry" />
+      </Feature>
+
+      <!-- UI -->
+      <UIRef Id="WixUI_InstallDir" />
+      <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+
+   </Product>
+</Wix>
