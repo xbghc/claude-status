@@ -34,8 +34,8 @@
                      Key="Software\{{.Company}}\{{.Product}}"
                      Name="installed"
                      Type="integer" Value="1" KeyPath="yes" />
-                  <!-- ICE64: RemoveFile for custom dir in user profile -->
-                  <RemoveFile Id="RemoveInstallDir" Name="*" On="uninstall" />
+                  <!-- ICE64: register INSTALLDIR in RemoveFile table for uninstall -->
+                  <RemoveFolder Id="RemoveINSTALLDIR" On="uninstall" />
                </Component>
                {{end}}
 
