@@ -109,6 +109,15 @@ function Build-WinRes {
     Write-Host "=== 生成 Windows 资源 ===" -ForegroundColor Cyan
     Require-Tool "go-winres" "go-winres (go install github.com/tc-hib/go-winres@latest)"
 
+    # 从 version.go 读取版本号
+    $versionFile = "internal\version\version.go"
+    $versionLine = Select-String -Path $versionFile -Pattern 'const Version = "([^"]+)"'
+    if (-not $versionLine) {
+        throw "无法从 $versionFile 读取版本号"
+    }
+    $appVersion = $versionLine.Matches[0].Groups[1].Value
+    Write-Host "  版本: $appVersion" -ForegroundColor Gray
+
     # 生成 winres 所需的 icon.png（从 ICO 转换）
     $iconPng = "$WinResDir\icon.png"
     if (-not (Test-Path $iconPng)) {
@@ -129,7 +138,7 @@ function Build-WinRes {
 
     Push-Location $CmdDir
     try {
-        & go-winres make --arch amd64,arm64
+        & go-winres make --arch amd64,arm64 --product-version="$appVersion" --file-version="$appVersion"
         if ($LASTEXITCODE -ne 0) { throw "go-winres 失败" }
     }
     finally {

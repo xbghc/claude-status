@@ -9,7 +9,7 @@
       "0409": {
         "identity": {
           "name": "Claude Status Monitor",
-          "version": "1.0.0.0"
+          "version": "0.0.0.0"
         },
         "description": "Claude Code Status Monitor for Windows",
         "minimum-os": "win7",
@@ -23,20 +23,20 @@
     "#1": {
       "0409": {
         "fixed": {
-          "file_version": "1.0.0.0",
-          "product_version": "1.0.0.0"
+          "file_version": "0.0.0.0",
+          "product_version": "0.0.0.0"
         },
         "info": {
           "0409": {
             "Comments": "Claude Code Status Monitor",
             "CompanyName": "",
             "FileDescription": "Claude Code Status Monitor",
-            "FileVersion": "1.0.0",
+            "FileVersion": "0.0.0",
             "InternalName": "claude-status",
             "LegalCopyright": "",
             "OriginalFilename": "claude-status.exe",
             "ProductName": "Claude Status Monitor",
-            "ProductVersion": "1.0.0"
+            "ProductVersion": "0.0.0"
           }
         }
       }
