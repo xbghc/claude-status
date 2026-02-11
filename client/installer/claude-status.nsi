@@ -37,6 +37,7 @@
 !define FONT_SIZE_BTN    "10"
 
 ; ---- General Settings ----
+SetCompressor /SOLID lzma
 Name "Claude Status Monitor ${VERSION}"
 OutFile "..\build\claude-status-${ARCH}-setup.exe"
 InstallDir "$LOCALAPPDATA\Claude Status Monitor"
@@ -65,6 +66,7 @@ Var hFontTitle
 Var hFontNormal
 Var hFontSmall
 Var hFontBtn
+Var hFontCheck
 
 ; ---- Macro: Hide Standard NSIS Chrome ----
 !macro HideStandardChrome
@@ -110,6 +112,7 @@ LoadLanguageFile "${NSISDIR}\Contrib\Language files\SimpChinese.nlf"
 !define STR_OPT_DESKTOP     "创建桌面快捷方式"
 !define STR_OPT_AUTOSTART   "开机自动启动"
 !define STR_INSTALL_BTN     "安装"
+!define STR_INSTALLING      "正在安装..."
 !define STR_STATUS_FILES    "正在复制文件..."
 !define STR_STATUS_SHORT    "正在创建快捷方式..."
 !define STR_STATUS_REG      "正在写入注册表..."
@@ -134,7 +137,7 @@ Function .onInit
   Pop $0  ; exit code
   Pop $1  ; output
   ${If} $0 == 0
-    StrCpy $2 $1 18  ; Check if output starts with valid process info
+    StrCpy $2 $1 14  ; Check first 14 chars to match "INFO: No tasks"
     ${IfNot} $2 == "INFO: No tasks"
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "${STR_PROC_RUNNING}" IDOK +2
       Abort
@@ -148,6 +151,7 @@ Function .onInit
   CreateFont $hFontNormal "${FONT_NAME}" ${FONT_SIZE_NORMAL} 400
   CreateFont $hFontSmall  "${FONT_NAME}" ${FONT_SIZE_SMALL} 400
   CreateFont $hFontBtn    "${FONT_NAME}" ${FONT_SIZE_BTN} 600
+  CreateFont $hFontCheck  "${FONT_NAME}" 28 700
 FunctionEnd
 
 Function .onGUIInit
@@ -224,13 +228,13 @@ Function pgInstallCreate
   SetCtlColors $0 ${TEXT_COLOR} ${BG_COLOR}
 
   ; ---- Title: App Name ----
-  ${NSD_CreateLabel} 20u 14u 280u 20u "${STR_APP_NAME}"
+  ${NSD_CreateLabel} 20u 14u 276u 20u "${STR_APP_NAME}"
   Pop $0
   SetCtlColors $0 ${TEXT_COLOR} ${BG_COLOR}
   SendMessage $0 ${WM_SETFONT} $hFontTitle 1
 
   ; ---- Version label ----
-  ${NSD_CreateLabel} 20u 36u 280u 12u "${STR_VERSION}"
+  ${NSD_CreateLabel} 20u 36u 276u 12u "${STR_VERSION}"
   Pop $0
   SetCtlColors $0 ${SUBTEXT_COLOR} ${BG_COLOR}
   SendMessage $0 ${WM_SETFONT} $hFontSmall 1
@@ -342,21 +346,53 @@ Function pgProgressShow
   GetDlgItem $0 $R0 1016
   ShowWindow $0 ${SW_HIDE}
 
+  ; ---- DPI-scaled pixel positions for instfiles controls ----
+  ; Base values at 96 DPI: margin=24, statusY=76, barY=100, contentW=420, barH=10, statusH=20
+  System::Call "user32::GetDC(p 0) p.r1"
+  System::Call "gdi32::GetDeviceCaps(p r1, i 90) i.r2"  ; LOGPIXELSY = 90 (consistent with .onGUIInit)
+  System::Call "user32::ReleaseDC(p 0, p r1)"
+
+  ; Scale positions: value * dpi / 96
+  IntOp $3 24 * $2
+  IntOp $3 $3 / 96   ; scaled margin X
+  IntOp $4 420 * $2
+  IntOp $4 $4 / 96   ; scaled content width
+  IntOp $5 100 * $2
+  IntOp $5 $5 / 96   ; scaled bar Y
+  IntOp $6 10 * $2
+  IntOp $6 $6 / 96   ; scaled bar height
+  IntOp $7 76 * $2
+  IntOp $7 $7 / 96   ; scaled status Y
+  IntOp $8 20 * $2
+  IntOp $8 $8 / 96   ; scaled status height
+
   ; ---- Restyle progress bar: make it thinner and modern ----
   GetDlgItem $0 $R0 1004
-  System::Call "user32::SetWindowPos(p $0, p 0, i 24, i 100, i 420, i 10, i 0x0014)"
-  ; Set progress bar color (PBM_SETBARCOLOR = 0x0409)
-  System::Call "*(i 215, i 119, i 6) p.r1"
-  SendMessage $0 0x0409 0 0x0006D9
+  System::Call "user32::SetWindowPos(p $0, p 0, i $3, i $5, i $4, i $6, i 0x0014)"
+  ; Set progress bar color to accent amber D97706 (PBM_SETBARCOLOR = 0x0409, COLORREF = 0x00BBGGRR)
+  SendMessage $0 0x0409 0 0x000677D9
+  ; Set progress bar background to match page (PBM_SETBKCOLOR = 0x2001, FAFAF9 -> 0x00F9FAFA)
+  SendMessage $0 0x2001 0 0x00F9FAFA
 
   ; ---- Restyle status text ----
   GetDlgItem $0 $R0 1006
   SetCtlColors $0 ${TEXT_COLOR} ${BG_COLOR}
   SendMessage $0 ${WM_SETFONT} $hFontNormal 1
-  System::Call "user32::SetWindowPos(p $0, p 0, i 24, i 76, i 420, i 20, i 0x0014)"
+  System::Call "user32::SetWindowPos(p $0, p 0, i $3, i $7, i $4, i $8, i 0x0014)"
 
-  ; ---- Add "Installing..." title above ----
-  ; We use the page background area to draw additional text
+  ; ---- Add "Installing..." title above progress bar ----
+  ; instfiles page doesn't support nsDialogs, so create a STATIC control via Win32 API
+  ; Base title position at 96 DPI: (24, 30, 420, 36)
+  IntOp $R1 30 * $2
+  IntOp $R1 $R1 / 96  ; scaled title Y
+  IntOp $R2 36 * $2
+  IntOp $R2 $R2 / 96  ; scaled title height
+  System::Call "user32::CreateWindowEx(i 0, t 'STATIC', t '${STR_INSTALLING}', \
+    i ${WS_CHILD}|${WS_VISIBLE}, i $3, i $R1, i $4, i $R2, p $R0, p 0, p 0, p 0) p.r9"
+  SetCtlColors $9 ${TEXT_COLOR} ${BG_COLOR}
+  SendMessage $9 ${WM_SETFONT} $hFontTitle 1
+
+  ; Set page background color
   SetCtlColors $R0 ${TEXT_COLOR} ${BG_COLOR}
 FunctionEnd
 
@@ -377,8 +413,7 @@ Function pgFinishCreate
   ${NSD_CreateLabel} 20u 20u 26u 24u "✓"
   Pop $0
   SetCtlColors $0 ${SUCCESS_COLOR} ${BG_COLOR}
-  CreateFont $1 "${FONT_NAME}" 28 700
-  SendMessage $0 ${WM_SETFONT} $1 1
+  SendMessage $0 ${WM_SETFONT} $hFontCheck 1
 
   ; ---- "Installation Complete" title ----
   ${NSD_CreateLabel} 48u 24u 260u 18u "${STR_COMPLETE}"
@@ -387,13 +422,13 @@ Function pgFinishCreate
   SendMessage $0 ${WM_SETFONT} $hFontTitle 1
 
   ; ---- Success message ----
-  ${NSD_CreateLabel} 20u 56u 280u 24u "${STR_COMPLETE_MSG}"
+  ${NSD_CreateLabel} 20u 56u 276u 24u "${STR_COMPLETE_MSG}"
   Pop $0
   SetCtlColors $0 ${SUBTEXT_COLOR} ${BG_COLOR}
   SendMessage $0 ${WM_SETFONT} $hFontNormal 1
 
   ; ---- Launch checkbox ----
-  ${NSD_CreateCheckbox} 20u 92u 280u 14u "${STR_LAUNCH}"
+  ${NSD_CreateCheckbox} 20u 92u 276u 14u "${STR_LAUNCH}"
   Pop $hChkLaunch
   SetCtlColors $hChkLaunch ${TEXT_COLOR} ${BG_COLOR}
   SendMessage $hChkLaunch ${WM_SETFONT} $hFontNormal 1
