@@ -8,10 +8,12 @@ permissions:
   contents: write
 
 jobs:
-  version-and-release:
+  version-and-tag:
     # Skip version bump commits to prevent infinite loop
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
 
     steps:
       - name: Checkout
@@ -79,44 +81,13 @@ jobs:
           git tag "v${NEW_VERSION}"
           git push origin main "v${NEW_VERSION}"
 
-      # Build executables and create release in the same workflow.
-      # Tags pushed by GITHUB_TOKEN do not trigger other workflows,
-      # so release.yml won't fire for auto-released tags.
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-          cache-dependency-path: client/go.sum
-
-      - name: Install ImageMagick
-        run: choco install imagemagick -y --no-progress
-
-      - name: Install go-winres
-        run: go install github.com/tc-hib/go-winres@latest
-
-      - name: Install NSIS
-        run: |
-          choco install nsis -y --no-progress
-          echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
-
-      - name: Build
-        working-directory: client
-        run: .\build.ps1 -All
-
-      - name: Build Installers
-        working-directory: client/installer
-        run: |
-          makensis /INPUTCHARSET UTF8 /DARCH=amd64 /DVERSION=${{ steps.bump.outputs.new_version }} /DEXE_PATH=..\build\claude-status-amd64.exe claude-status.nsi
-          makensis /INPUTCHARSET UTF8 /DARCH=arm64 /DVERSION=${{ steps.bump.outputs.new_version }} /DEXE_PATH=..\build\claude-status-arm64.exe claude-status.nsi
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.bump.outputs.new_version }}
-          files: |
-            client/build/claude-status-amd64.exe
-            client/build/claude-status-arm64.exe
-            client/build/claude-status-amd64-setup.exe
-            client/build/claude-status-arm64-setup.exe
+  # Build and release in the same workflow run.
+  # Tags pushed by GITHUB_TOKEN do not trigger other workflows,
+  # so release.yml won't fire for auto-released tags.
+  release:
+    needs: version-and-tag
+    uses: ./.github/workflows/build-and-release.yml
+    with:
+      version: ${{ needs.version-and-tag.outputs.new_version }}
           generate_release_notes: true
 
