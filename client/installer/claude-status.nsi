@@ -92,6 +92,7 @@ Var hFontBtn
 !macroend
 
 ; ---- Page Declarations ----
+Page custom pgLangCreate pgLangLeave
 Page custom pgInstallCreate pgInstallLeave
 Page instfiles pgProgressPre pgProgressShow
 Page custom pgFinishCreate pgFinishLeave
@@ -150,19 +151,6 @@ Function .onInit
   StrCpy $OptAutoStart "0"
   StrCpy $OptLaunch "1"
 
-  ; Language selection
-  Push ""
-  Push ${LANG_ENGLISH}
-  Push "English"
-  Push ${LANG_SIMPCHINESE}
-  Push "简体中文"
-  Push A
-  LangDLL::LangDialog "Language / 语言" "Select language / 选择语言"
-  Pop $LANGUAGE
-  ${If} $LANGUAGE == "cancel"
-    Abort
-  ${EndIf}
-
   ; Check if the application is already running and close it
   nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq claude-status.exe" /NH'
   Pop $0  ; exit code
@@ -212,7 +200,68 @@ Function .onInstSuccess
 FunctionEnd
 
 ; ============================================================
-; Page 1: Main Install Page (Welcome + Directory + Components)
+; Page 1: Language Selection Page
+; ============================================================
+Function pgLangCreate
+  !insertmacro HideStandardChrome
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+  SetCtlColors $0 ${TEXT_COLOR} ${BG_COLOR}
+
+  ; ---- Title ----
+  ${NSD_CreateLabel} 20u 14u 280u 20u "Claude Status Monitor"
+  Pop $0
+  SetCtlColors $0 ${TEXT_COLOR} ${BG_COLOR}
+  SendMessage $0 ${WM_SETFONT} $hFontTitle 1
+
+  ; ---- Subtitle ----
+  ${NSD_CreateLabel} 20u 36u 280u 12u "Select Language / 选择语言"
+  Pop $0
+  SetCtlColors $0 ${SUBTEXT_COLOR} ${BG_COLOR}
+  SendMessage $0 ${WM_SETFONT} $hFontSmall 1
+
+  ; ---- Horizontal separator ----
+  ${NSD_CreateHLine} 20u 54u 276u 1u ""
+  Pop $0
+
+  ; ---- English button ----
+  ${NSD_CreateButton} 60u 74u 196u 28u "English"
+  Pop $0
+  SetCtlColors $0 ${BTN_TEXT_COLOR} ${ACCENT_COLOR}
+  SendMessage $0 ${WM_SETFONT} $hFontBtn 1
+  ${NSD_OnClick} $0 pgLangClickEnglish
+
+  ; ---- Chinese button ----
+  ${NSD_CreateButton} 60u 112u 196u 28u "简体中文"
+  Pop $0
+  SetCtlColors $0 ${BTN_TEXT_COLOR} ${ACCENT_COLOR}
+  SendMessage $0 ${WM_SETFONT} $hFontBtn 1
+  ${NSD_OnClick} $0 pgLangClickChinese
+
+  nsDialogs::Show
+FunctionEnd
+
+Function pgLangClickEnglish
+  StrCpy $LANGUAGE ${LANG_ENGLISH}
+  GetDlgItem $0 $HWNDPARENT 1
+  SendMessage $0 ${BM_CLICK} 0 0
+FunctionEnd
+
+Function pgLangClickChinese
+  StrCpy $LANGUAGE ${LANG_SIMPCHINESE}
+  GetDlgItem $0 $HWNDPARENT 1
+  SendMessage $0 ${BM_CLICK} 0 0
+FunctionEnd
+
+Function pgLangLeave
+FunctionEnd
+
+; ============================================================
+; Page 2: Main Install Page (Welcome + Directory + Components)
 ; ============================================================
 Function pgInstallCreate
   !insertmacro HideStandardChrome
@@ -316,7 +365,7 @@ Function pgInstallLeave
 FunctionEnd
 
 ; ============================================================
-; Page 2: Progress Page (restyled instfiles)
+; Page 3: Progress Page (restyled instfiles)
 ; ============================================================
 Function pgProgressPre
   ; Enable/disable optional sections based on user choices
@@ -362,7 +411,7 @@ Function pgProgressShow
 FunctionEnd
 
 ; ============================================================
-; Page 3: Finish Page
+; Page 4: Finish Page
 ; ============================================================
 Function pgFinishCreate
   !insertmacro HideStandardChrome
