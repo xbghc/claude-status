@@ -4,6 +4,7 @@ package tray
 
 import (
 	"fmt"
+	"os/exec"
 	"sync"
 	"syscall"
 	"time"
@@ -216,6 +217,32 @@ func (t *App) setupContextMenu() {
 	t.mConnection = walk.NewMenuAction(t.connectionMenu)
 	t.mConnection.SetText("连接")
 	t.contextMenu.Actions().Add(t.mConnection)
+
+	// 分隔符
+	t.contextMenu.Actions().Add(walk.NewSeparatorAction())
+
+	// 关于子菜单
+	aboutMenu, _ := walk.NewMenu()
+	aboutAction := walk.NewMenuAction(aboutMenu)
+	aboutAction.SetText("关于")
+	t.contextMenu.Actions().Add(aboutAction)
+
+	// GitHub 仓库
+	githubAction := walk.NewAction()
+	githubAction.SetText("GitHub 仓库")
+	githubAction.Triggered().Attach(func() {
+		exec.Command("cmd", "/c", "start", "https://github.com/xbghc/claude-status").Start()
+	})
+	aboutMenu.Actions().Add(githubAction)
+
+	// 日志文件
+	logAction := walk.NewAction()
+	logPath := logger.GetLogPath()
+	logAction.SetText("日志: " + logPath)
+	logAction.Triggered().Attach(func() {
+		exec.Command("explorer", "/select,", logPath).Start()
+	})
+	aboutMenu.Actions().Add(logAction)
 
 	// 分隔符
 	t.contextMenu.Actions().Add(walk.NewSeparatorAction())

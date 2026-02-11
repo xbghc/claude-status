@@ -48,10 +48,16 @@ func truncateLogFile(path string, maxLines int) {
 }
 
 var (
-	logFile    *os.File
-	logLogger  *log.Logger
-	debugMode  bool
+	logFile     *os.File
+	logLogger   *log.Logger
+	debugMode   bool
+	logFilePath string
 )
+
+// GetLogPath 返回日志文件路径
+func GetLogPath() string {
+	return logFilePath
+}
 
 // Init 初始化日志文件
 func Init() error {
@@ -64,6 +70,7 @@ func Init() error {
 
 	// 日志文件路径
 	logPath := filepath.Join(exeDir, "claude-status.log")
+	logFilePath = logPath
 
 	// 截断日志文件，只保留最近 N 行
 	truncateLogFile(logPath, maxLogLines)
