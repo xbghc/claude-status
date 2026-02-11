@@ -1,7 +1,6 @@
 <?xml version="1.0"?>
 
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
-     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 
    <Product Id="*"
             UpgradeCode="{{.UpgradeCode}}"
@@ -52,13 +51,11 @@
       </Directory>
 
       <!-- Close running instance before install/uninstall -->
-      <util:CloseApplication Id="CloseApp"
-                             Target="claude-status.exe"
-                             RebootPrompt="no"
-                             TerminateProcess="1" />
+      <Property Id="QtExecCmdLine" Value="taskkill /F /IM claude-status.exe" />
+      <CustomAction Id="KillApp" BinaryKey="WixCA" DllEntry="CAQuietExec" Execute="immediate" Return="ignore" />
 
       <InstallExecuteSequence>
-         <Custom Action="WixCloseApplications" Before="InstallInitialize" />
+         <Custom Action="KillApp" Before="InstallInitialize" />
       </InstallExecuteSequence>
 
       <!-- Features -->
