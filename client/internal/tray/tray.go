@@ -832,3 +832,12 @@ func (t *App) ShowServerSelection() {
 	t.mStatus.SetText("请选择服务器")
 	t.notifyIcon.SetToolTip("Claude Code Status - 请选择服务器")
 }
+
+// SetTooltip 设置托盘图标的 tooltip 文本
+func (t *App) SetTooltip(text string) {
+	if text == "" {
+		t.notifyIcon.SetToolTip("")
+	} else {
+		t.notifyIcon.SetToolTip("Claude Code Status - " + text)
+	}
+}
