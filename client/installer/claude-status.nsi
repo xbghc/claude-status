@@ -159,19 +159,42 @@ Function .onGUIInit
   GetDlgItem $0 $HWNDPARENT 1256
   ShowWindow $0 ${SW_HIDE}
 
-  ; Resize the outer window so bottom buttons are not clipped
-  ; Default NSIS window (~503x399) is too short for our 450px inner area
-  System::Call "user32::GetSystemMetrics(i 0) i.r2"  ; SM_CXSCREEN
-  System::Call "user32::GetSystemMetrics(i 1) i.r3"  ; SM_CYSCREEN
-  IntOp $4 $2 - 520
-  IntOp $4 $4 / 2
-  IntOp $5 $3 - 490
-  IntOp $5 $5 / 2
-  System::Call "user32::SetWindowPos(p $HWNDPARENT, p 0, i $4, i $5, i 520, i 490, i 0x0004)"
+  ; ---- DPI-adaptive window sizing ----
+  ; Dialog unit controls scale with DPI, so pixel sizes must scale too.
+  ; Base inner area: 500 x 400 at 96 DPI (100%).
+  ; Get system DPI
+  System::Call "user32::GetDC(p 0) p.r1"
+  System::Call "gdi32::GetDeviceCaps(p r1, i 90) i.r2"  ; LOGPIXELSY = 90
+  System::Call "user32::ReleaseDC(p 0, p r1)"
 
-  ; Resize the inner page area to fill the window
+  ; Scale inner area: base * dpi / 96
+  IntOp $3 500 * $2
+  IntOp $3 $3 / 96  ; scaled inner width
+  IntOp $4 400 * $2
+  IntOp $4 $4 / 96  ; scaled inner height
+
+  ; Calculate exact outer window size via AdjustWindowRectEx
+  System::Call "user32::GetWindowLong(p $HWNDPARENT, i -16) i.r5"  ; GWL_STYLE
+  System::Call "user32::GetWindowLong(p $HWNDPARENT, i -20) i.r6"  ; GWL_EXSTYLE
+  System::Call "*(i 0, i 0, i r3, i r4) p.r7"
+  System::Call "user32::AdjustWindowRectEx(p r7, i r5, i 0, i r6)"
+  System::Call "*$7(i.r8, i.r9, i.R0, i.R1)"
+  System::Free $7
+  IntOp $R2 $R0 - $8  ; outer width
+  IntOp $R3 $R1 - $9  ; outer height
+
+  ; Center on screen
+  System::Call "user32::GetSystemMetrics(i 0) i.r8"  ; SM_CXSCREEN
+  System::Call "user32::GetSystemMetrics(i 1) i.r9"  ; SM_CYSCREEN
+  IntOp $R4 $8 - $R2
+  IntOp $R4 $R4 / 2
+  IntOp $R5 $9 - $R3
+  IntOp $R5 $R5 / 2
+
+  ; Apply sizes: outer window (move + resize), inner page area (resize only)
+  System::Call "user32::SetWindowPos(p $HWNDPARENT, p 0, i $R4, i $R5, i $R2, i $R3, i 0x0004)"
   GetDlgItem $0 $HWNDPARENT 1018
-  System::Call "user32::SetWindowPos(p $0, p 0, i 0, i 0, i 500, i 450, i 0x0014)"
+  System::Call "user32::SetWindowPos(p $0, p 0, i 0, i 0, i $3, i $4, i 0x0014)"
 FunctionEnd
 
 Function .onUserAbort
