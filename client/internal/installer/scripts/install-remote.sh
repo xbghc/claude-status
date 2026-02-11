@@ -16,13 +16,11 @@ cp "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS.backup.$(date +%Y%m%d%H%M%S)" 2>/dev/nul
 # 先删除旧的 claude-status Hook（如果存在），再添加新的
 # 这样可以确保版本更新时 Hook 配置也被更新
 jq --arg hook "$HOOK_CMD" '
-    # 定义一个函数来过滤掉包含 status-hook.sh 的 Hook
     def remove_old_hooks:
         if . == null then []
         else [.[] | select(.hooks[0].command | contains("status-hook.sh") | not)]
         end;
 
-    # 先清理旧的 Hook
     .hooks.UserPromptSubmit = (.hooks.UserPromptSubmit | remove_old_hooks) |
     .hooks.PostToolUse = (.hooks.PostToolUse | remove_old_hooks) |
     .hooks.Stop = (.hooks.Stop | remove_old_hooks) |
@@ -30,7 +28,6 @@ jq --arg hook "$HOOK_CMD" '
     .hooks.SessionStart = (.hooks.SessionStart | remove_old_hooks) |
     .hooks.SessionEnd = (.hooks.SessionEnd | remove_old_hooks) |
 
-    # 添加新的 Hook（注意：不支持 matcher 的事件不添加 matcher 字段）
     .hooks.UserPromptSubmit = (.hooks.UserPromptSubmit // []) + [{
         "hooks": [{"type": "command", "command": ($hook + " working")}]
     }] |
