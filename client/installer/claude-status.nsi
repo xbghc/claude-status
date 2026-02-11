@@ -37,6 +37,7 @@
 !define FONT_SIZE_BTN    "10"
 
 ; ---- General Settings ----
+SetCompressor /SOLID lzma
 Name "Claude Status Monitor ${VERSION}"
 OutFile "..\build\claude-status-${ARCH}-setup.exe"
 InstallDir "$LOCALAPPDATA\Claude Status Monitor"
@@ -134,7 +135,7 @@ Function .onInit
   Pop $0  ; exit code
   Pop $1  ; output
   ${If} $0 == 0
-    StrCpy $2 $1 18  ; Check if output starts with valid process info
+    StrCpy $2 $1 14  ; Check first 14 chars to match "INFO: No tasks"
     ${IfNot} $2 == "INFO: No tasks"
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "${STR_PROC_RUNNING}" IDOK +2
       Abort
@@ -345,9 +346,8 @@ Function pgProgressShow
   ; ---- Restyle progress bar: make it thinner and modern ----
   GetDlgItem $0 $R0 1004
   System::Call "user32::SetWindowPos(p $0, p 0, i 24, i 100, i 420, i 10, i 0x0014)"
-  ; Set progress bar color (PBM_SETBARCOLOR = 0x0409)
-  System::Call "*(i 215, i 119, i 6) p.r1"
-  SendMessage $0 0x0409 0 0x0006D9
+  ; Set progress bar color to accent amber D97706 (PBM_SETBARCOLOR = 0x0409, COLORREF = 0x00BBGGRR)
+  SendMessage $0 0x0409 0 0x000677D9
 
   ; ---- Restyle status text ----
   GetDlgItem $0 $R0 1006
