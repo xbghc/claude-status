@@ -215,8 +215,28 @@ function Build-Msi {
 
     $msiOutput = "$BuildDir\$AppName-$TargetArch-setup.msi"
 
-    & go-msi make --path wix.json --src templates --msi $msiOutput --version $appVersion --arch $msiArch
-    if ($LASTEXITCODE -ne 0) { throw "go-msi make 失败" }
+    # go-msi 使用系统临时目录，在 CI 中可能与工作区不在同一盘符（如 D: vs C:），
+    # 导致 filepath.Rel() 失败。将 TEMP 临时指向工作区同盘来规避。
+    $origTemp = $env:TEMP
+    $origTmp = $env:TMP
+    $workDrive = (Resolve-Path ".").Drive.Root
+    $tempDrive = (Resolve-Path $env:TEMP).Drive.Root
+    if ($workDrive -ne $tempDrive) {
+        $localTemp = Join-Path $workDrive "tmp\go-msi"
+        New-Item -ItemType Directory -Path $localTemp -Force | Out-Null
+        $env:TEMP = $localTemp
+        $env:TMP = $localTemp
+        Write-Host "  临时目录重定向: $localTemp (避免跨盘符)" -ForegroundColor Gray
+    }
+
+    try {
+        & go-msi make --path wix.json --src templates --msi $msiOutput --version $appVersion --arch $msiArch
+        if ($LASTEXITCODE -ne 0) { throw "go-msi make 失败" }
+    }
+    finally {
+        $env:TEMP = $origTemp
+        $env:TMP = $origTmp
+    }
 
     # 清理临时的通用名 exe
     Remove-Item $exeDst -Force -ErrorAction SilentlyContinue
