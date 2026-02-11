@@ -228,13 +228,13 @@ Function pgInstallCreate
   SetCtlColors $0 ${TEXT_COLOR} ${BG_COLOR}
 
   ; ---- Title: App Name ----
-  ${NSD_CreateLabel} 20u 14u 280u 20u "${STR_APP_NAME}"
+  ${NSD_CreateLabel} 20u 14u 276u 20u "${STR_APP_NAME}"
   Pop $0
   SetCtlColors $0 ${TEXT_COLOR} ${BG_COLOR}
   SendMessage $0 ${WM_SETFONT} $hFontTitle 1
 
   ; ---- Version label ----
-  ${NSD_CreateLabel} 20u 36u 280u 12u "${STR_VERSION}"
+  ${NSD_CreateLabel} 20u 36u 276u 12u "${STR_VERSION}"
   Pop $0
   SetCtlColors $0 ${SUBTEXT_COLOR} ${BG_COLOR}
   SendMessage $0 ${WM_SETFONT} $hFontSmall 1
@@ -349,7 +349,7 @@ Function pgProgressShow
   ; ---- DPI-scaled pixel positions for instfiles controls ----
   ; Base values at 96 DPI: margin=24, statusY=76, barY=100, contentW=420, barH=10, statusH=20
   System::Call "user32::GetDC(p 0) p.r1"
-  System::Call "gdi32::GetDeviceCaps(p r1, i 88) i.r2"  ; LOGPIXELSX = 88
+  System::Call "gdi32::GetDeviceCaps(p r1, i 90) i.r2"  ; LOGPIXELSY = 90 (consistent with .onGUIInit)
   System::Call "user32::ReleaseDC(p 0, p r1)"
 
   ; Scale positions: value * dpi / 96
@@ -371,6 +371,8 @@ Function pgProgressShow
   System::Call "user32::SetWindowPos(p $0, p 0, i $3, i $5, i $4, i $6, i 0x0014)"
   ; Set progress bar color to accent amber D97706 (PBM_SETBARCOLOR = 0x0409, COLORREF = 0x00BBGGRR)
   SendMessage $0 0x0409 0 0x000677D9
+  ; Set progress bar background to match page (PBM_SETBKCOLOR = 0x2001, FAFAF9 -> 0x00F9FAFA)
+  SendMessage $0 0x2001 0 0x00F9FAFA
 
   ; ---- Restyle status text ----
   GetDlgItem $0 $R0 1006
@@ -420,13 +422,13 @@ Function pgFinishCreate
   SendMessage $0 ${WM_SETFONT} $hFontTitle 1
 
   ; ---- Success message ----
-  ${NSD_CreateLabel} 20u 56u 280u 24u "${STR_COMPLETE_MSG}"
+  ${NSD_CreateLabel} 20u 56u 276u 24u "${STR_COMPLETE_MSG}"
   Pop $0
   SetCtlColors $0 ${SUBTEXT_COLOR} ${BG_COLOR}
   SendMessage $0 ${WM_SETFONT} $hFontNormal 1
 
   ; ---- Launch checkbox ----
-  ${NSD_CreateCheckbox} 20u 92u 280u 14u "${STR_LAUNCH}"
+  ${NSD_CreateCheckbox} 20u 92u 276u 14u "${STR_LAUNCH}"
   Pop $hChkLaunch
   SetCtlColors $hChkLaunch ${TEXT_COLOR} ${BG_COLOR}
   SendMessage $hChkLaunch ${WM_SETFONT} $hFontNormal 1
