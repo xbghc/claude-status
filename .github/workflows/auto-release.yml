@@ -103,8 +103,8 @@ jobs:
       - name: Build Installers
         working-directory: client/installer
         run: |
-          makensis /DARCH=amd64 /DVERSION=${{ steps.bump.outputs.new_version }} /DEXE_PATH=..\build\claude-status-amd64.exe claude-status.nsi
-          makensis /DARCH=arm64 /DVERSION=${{ steps.bump.outputs.new_version }} /DEXE_PATH=..\build\claude-status-arm64.exe claude-status.nsi
+          makensis /INPUTCHARSET UTF8 /DARCH=amd64 /DVERSION=${{ steps.bump.outputs.new_version }} /DEXE_PATH=..\build\claude-status-amd64.exe claude-status.nsi
+          makensis /INPUTCHARSET UTF8 /DARCH=arm64 /DVERSION=${{ steps.bump.outputs.new_version }} /DEXE_PATH=..\build\claude-status-arm64.exe claude-status.nsi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
