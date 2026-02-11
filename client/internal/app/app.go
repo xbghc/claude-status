@@ -59,15 +59,15 @@ func appMain(trayApp *tray.App, configPath string, sigCh chan os.Signal) {
 
 	// 检查配置文件是否存在
 	logger.Info("Checking config file: %s", configPath)
+	var cfg *config.Config
+	var initialState State
+
 	if !config.Exists(configPath) {
 		logger.Info("Config file does not exist")
-		// 配置不存在，等待用户选择服务器
 		if len(servers) > 0 {
-			trayApp.ShowServerSelection()
-			waitForServerSelection(trayApp, configPath, sigCh)
+			initialState = StateUnconfigured
 		} else {
 			trayApp.SetError("no_config", "配置文件不存在且无预设服务器")
-			// 等待用户退出
 			select {
 			case <-trayApp.QuitChan():
 				return
@@ -75,148 +75,186 @@ func appMain(trayApp *tray.App, configPath string, sigCh chan os.Signal) {
 				return
 			}
 		}
-		return
-	}
-
-	// 加载配置
-	logger.Info("Loading config from: %s", configPath)
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		logger.Error("Failed to load config: %v", err)
-		if len(servers) > 0 {
-			trayApp.ShowServerSelection()
-			waitForServerSelection(trayApp, configPath, sigCh)
+	} else {
+		// 加载配置
+		logger.Info("Loading config from: %s", configPath)
+		cfg, err = config.Load(configPath)
+		if err != nil {
+			logger.Error("Failed to load config: %v", err)
+			if len(servers) > 0 {
+				initialState = StateUnconfigured
+			} else {
+				trayApp.SetError("no_config", "配置文件无效")
+				select {
+				case <-trayApp.QuitChan():
+					return
+				case <-sigCh:
+					return
+				}
+			}
 		} else {
-			trayApp.SetError("no_config", "配置文件无效")
-			select {
-			case <-trayApp.QuitChan():
-				return
-			case <-sigCh:
-				return
+			// 设置调试模式
+			if cfg.Debug {
+				logger.SetDebug(true)
+			}
+			trayApp.SetStatusTimeout(cfg.StatusTimeout)
+			initialState = StateConnecting
+		}
+	}
+
+	// 启动状态机驱动的主循环
+	eventLoop(initialState, cfg, trayApp, configPath, sigCh)
+}
+
+// eventLoop 状态机驱动的主循环
+func eventLoop(initialState State, cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) {
+	sm := NewStateMachine(initialState, func(change StateChange) {
+		logger.Info("State: %s -> %s (event: %s)", change.From, change.To, change.Event)
+		applyTrayState(trayApp, change, cfg)
+	})
+
+	// 应用初始状态的 UI
+	applyTrayState(trayApp, StateChange{To: initialState, Valid: true}, cfg)
+
+	for sm.Current() != StateQuitting {
+		switch sm.Current() {
+		case StateUnconfigured:
+			cfg = handleUnconfigured(sm, cfg, trayApp, configPath, sigCh)
+
+		case StateConnecting:
+			handleConnecting(sm, cfg, trayApp, configPath, sigCh)
+
+		case StateInstalling:
+			handleInstalling(sm, cfg, trayApp)
+
+		case StateReinstalling:
+			handleReinstalling(sm, cfg, trayApp)
+
+		case StateDisconnected, StateError:
+			cfg = handleWaitForUser(sm, cfg, trayApp, configPath, sigCh)
+		}
+	}
+}
+
+// handleUnconfigured 处理未配置状态，等待用户选择服务器
+func handleUnconfigured(sm *StateMachine, cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) *config.Config {
+	select {
+	case server := <-trayApp.ServerSelectChan():
+		newCfg := applyServerConfig(server, trayApp, configPath)
+		if newCfg != nil {
+			cfg = newCfg
+			sm.Transition(EventServerSelected)
+		} else {
+			trayApp.SetError("session_error", "保存配置失败")
+		}
+	case <-trayApp.QuitChan():
+		sm.Transition(EventUserQuit)
+	case <-sigCh:
+		sm.Transition(EventUserQuit)
+	}
+	return cfg
+}
+
+// handleConnecting 处理连接状态
+func handleConnecting(sm *StateMachine, cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) {
+	result := runConnection(sm, cfg, trayApp, sigCh)
+
+	// 连接结束后，根据结果触发事件（EventConnectSuccess 已在 runConnection 内部触发）
+	switch result.Event {
+	case EventConnectFailed, EventSessionError, EventSessionClosed:
+		trayApp.SetError(result.ErrorType, result.ErrorMsg)
+		sm.Transition(result.Event)
+	case EventVersionMismatch, EventNotConfigured:
+		sm.Transition(result.Event)
+	case EventUserDisconnect, EventUserQuit:
+		sm.Transition(result.Event)
+	case EventSwitchServer:
+		if result.NewServer != nil {
+			newCfg := applyServerConfig(*result.NewServer, trayApp, configPath)
+			if newCfg != nil {
+				*cfg = *newCfg
 			}
 		}
-		return
+		sm.Transition(EventSwitchServer)
 	}
+}
 
-	// 设置调试模式
-	if cfg.Debug {
-		logger.SetDebug(true)
+// handleInstalling 处理安装状态
+func handleInstalling(sm *StateMachine, cfg *config.Config, trayApp *tray.App) {
+	if doInstall(cfg, trayApp) {
+		sm.Transition(EventInstallSuccess)
+	} else {
+		sm.Transition(EventInstallFailed)
 	}
+}
 
-	// 设置状态超时
+// handleReinstalling 处理重新安装状态
+func handleReinstalling(sm *StateMachine, cfg *config.Config, trayApp *tray.App) {
+	if doReinstall(cfg, trayApp) {
+		sm.Transition(EventInstallSuccess)
+	} else {
+		sm.Transition(EventInstallFailed)
+	}
+}
+
+// handleWaitForUser 处理断开/错误状态，等待用户操作
+func handleWaitForUser(sm *StateMachine, cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) *config.Config {
+	select {
+	case server := <-trayApp.ServerSelectChan():
+		newCfg := applyServerConfig(server, trayApp, configPath)
+		if newCfg != nil {
+			cfg = newCfg
+		}
+		sm.Transition(EventServerSelected)
+	case <-trayApp.QuitChan():
+		sm.Transition(EventUserQuit)
+	case <-sigCh:
+		sm.Transition(EventUserQuit)
+	}
+	return cfg
+}
+
+// applyServerConfig 应用服务器配置并保存
+func applyServerConfig(server config.ServerConfig, trayApp *tray.App, configPath string) *config.Config {
+	cfg := config.NewFromServer(server)
+	cfg.ApplySSHConfig()
+
+	if cfg.StatusTimeout == 0 {
+		cfg.StatusTimeout = 300
+	}
 	trayApp.SetStatusTimeout(cfg.StatusTimeout)
 
-	// 启动连接管理
-	connectionManager(cfg, trayApp, configPath, sigCh)
-}
-
-// waitForServerSelection 等待用户选择服务器
-func waitForServerSelection(trayApp *tray.App, configPath string, sigCh chan os.Signal) {
-	for {
-		select {
-		case server := <-trayApp.ServerSelectChan():
-			// 用户选择了服务器，保存配置
-			cfg := config.NewFromServer(server)
-
-			// 应用 SSH config
-			cfg.ApplySSHConfig()
-
-			// 设置默认超时
-			if cfg.StatusTimeout == 0 {
-				cfg.StatusTimeout = 300
-			}
-			trayApp.SetStatusTimeout(cfg.StatusTimeout)
-
-			// 保存到配置文件
-			if err := config.Save(configPath, cfg); err != nil {
-				trayApp.SetError("session_error", "保存配置失败")
-				continue
-			}
-
-			// 启动连接
-			connectionManager(cfg, trayApp, configPath, sigCh)
-			return
-
-		case <-trayApp.QuitChan():
-			return
-
-		case <-sigCh:
-			return
+	if configPath != "" {
+		if err := config.Save(configPath, cfg); err != nil {
+			logger.Error("Failed to save config: %v", err)
+			return nil
 		}
 	}
+
+	return cfg
 }
 
-// connectionManager 管理 SSH 连接，支持重连
-func connectionManager(cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) {
-	for {
-		// 尝试连接
-		shouldContinue, newServer, userDisconnected, autoReconnect := runConnection(cfg, trayApp, sigCh)
-		if !shouldContinue {
-			return
-		}
-
-		// 如果连接过程中选择了新服务器，直接使用
-		if newServer != nil {
-			cfg = config.NewFromServer(*newServer)
-			cfg.ApplySSHConfig()
-			trayApp.SetStatusTimeout(cfg.StatusTimeout)
-			config.Save(configPath, cfg)
-			continue
-		}
-
-		// 如果需要自动重连（版本更新后），直接继续循环
-		if autoReconnect {
-			continue
-		}
-
-		// 如果是用户主动断开，设置断开状态
-		if userDisconnected {
-			trayApp.SetDisconnected()
-		}
-
-		// 等待用户选择服务器或退出
-		select {
-		case server := <-trayApp.ServerSelectChan():
-			cfg = config.NewFromServer(server)
-			cfg.ApplySSHConfig()
-			trayApp.SetStatusTimeout(cfg.StatusTimeout)
-			config.Save(configPath, cfg)
-			continue
-
-		case <-trayApp.QuitChan():
-			return
-
-		case <-sigCh:
-			return
-		}
-	}
-}
-
-// runConnection 运行一次连接，返回 (是否继续, 新选择的服务器, 是否用户主动断开, 是否自动重连)
-func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) (bool, *config.ServerConfig, bool, bool) {
-	// 获取显示名称
-	displayName := getDisplayName(cfg)
-
-	logger.Info("runConnection: mode=%s, display=%s", getMode(cfg), displayName)
-	trayApp.SetConnecting(displayName)
+// runConnection 运行一次连接，返回 ConnectionResult
+func runConnection(sm *StateMachine, cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) ConnectionResult {
+	logger.Info("runConnection: mode=%s, display=%s", getMode(cfg), getDisplayName(cfg))
 
 	// 创建客户端（SSH 或 WSL）
 	var client monitor.Client
-	var inst monitor.Installer
 
 	if cfg.WSL.Enabled {
 		client = wsl.NewClient(cfg)
-		inst = wsl.NewInstaller(cfg)
 	} else {
 		client = ssh.NewClient(cfg)
-		inst = installer.NewInstaller(cfg)
 	}
 
 	// 连接
 	if err := client.Connect(); err != nil {
 		logger.Error("Connect failed: %v", err)
-		trayApp.SetError("connection_failed", err.Error())
-		return true, nil, false, false // 等待用户操作
+		return ConnectionResult{
+			Event:     EventConnectFailed,
+			ErrorType: "connection_failed",
+			ErrorMsg:  err.Error(),
+		}
 	}
 	defer client.Close()
 	logger.Info("Connected successfully")
@@ -226,28 +264,30 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 		logger.Error("Start failed: %v", err)
 		errMsg := err.Error()
 
-		// 检测是否是版本不匹配，触发重新安装
+		// 检测是否是版本不匹配
 		if errors.Is(err, ssh.ErrVersionMismatch) || errors.Is(err, wsl.ErrVersionMismatch) {
 			logger.Info("版本不匹配，触发重新安装...")
-			client.Close()
-			shouldContinue, newServer := triggerReinstall(cfg, inst, trayApp)
-			return shouldContinue, newServer, false, true // 自动重连
+			return ConnectionResult{Event: EventVersionMismatch}
 		}
 
-		// 检测是否是服务端未配置，尝试自动安装
+		// 检测是否是服务端未配置
 		if isNotConfiguredError(errMsg) {
 			logger.Info("服务端未配置，尝试自动安装...")
-			shouldContinue, newServer := triggerInstall(cfg, inst, trayApp)
-			return shouldContinue, newServer, false, true // 自动重连
+			return ConnectionResult{Event: EventNotConfigured}
 		}
 
-		trayApp.SetError("session_error", errMsg)
-		return true, nil, false, false
+		return ConnectionResult{
+			Event:     EventConnectFailed,
+			ErrorType: "session_error",
+			ErrorMsg:  errMsg,
+		}
 	}
-	logger.Info("Session started")
-	trayApp.SetConnected(true, displayName)
 
-	// 主循环
+	// 连接成功，触发状态转换
+	logger.Info("Session started")
+	sm.Transition(EventConnectSuccess)
+
+	// 主监控循环
 	for {
 		select {
 		case statuses := <-client.StatusChan():
@@ -255,33 +295,103 @@ func runConnection(cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) 
 
 		case err := <-client.ErrorChan():
 			errMsg := err.Error()
+			errType := "session_error"
 			if isNotConfiguredError(errMsg) {
-				trayApp.SetError("not_configured", errMsg)
-			} else {
-				trayApp.SetError("session_error", errMsg)
+				errType = "not_configured"
 			}
-			return true, nil, false, false
+			return ConnectionResult{
+				Event:     EventSessionError,
+				ErrorType: errType,
+				ErrorMsg:  errMsg,
+			}
 
 		case <-client.Done():
-			trayApp.SetError("session_error", "连接已断开")
-			return true, nil, false, false
+			return ConnectionResult{
+				Event:     EventSessionClosed,
+				ErrorType: "session_error",
+				ErrorMsg:  "连接已断开",
+			}
 
 		case <-trayApp.QuitChan():
-			return false, nil, false, false
+			return ConnectionResult{Event: EventUserQuit}
 
 		case <-trayApp.DisconnectChan():
-			// 用户主动断开连接
 			logger.Info("用户主动断开连接")
-			return true, nil, true, false
+			return ConnectionResult{Event: EventUserDisconnect}
 
 		case server := <-trayApp.ServerSelectChan():
-			// 收到服务器切换请求，返回新服务器
-			return true, &server, false, false
+			return ConnectionResult{
+				Event:     EventSwitchServer,
+				NewServer: &server,
+			}
 
 		case <-sigCh:
-			return false, nil, false, false
+			return ConnectionResult{Event: EventUserQuit}
 		}
 	}
+}
+
+// doInstall 执行首次安装，返回是否成功
+func doInstall(cfg *config.Config, trayApp *tray.App) bool {
+	var inst monitor.Installer
+	if cfg.WSL.Enabled {
+		inst = wsl.NewInstaller(cfg)
+	} else {
+		inst = installer.NewInstaller(cfg)
+	}
+
+	if err := inst.Connect(); err != nil {
+		logger.Error("安装器连接失败: %v", err)
+		trayApp.SetError("install_failed", "安装失败: "+err.Error())
+		return false
+	}
+	defer inst.Close()
+
+	// 检查依赖
+	if ok, msg := inst.CheckDependencies(); !ok {
+		logger.Error("依赖检查失败: %s", msg)
+		trayApp.SetError("install_failed", msg)
+		return false
+	}
+
+	// 执行安装
+	if err := inst.Install(); err != nil {
+		logger.Error("安装失败: %v", err)
+		trayApp.SetError("install_failed", "安装失败: "+err.Error())
+		return false
+	}
+
+	logger.Info("服务端安装完成，等待重新连接...")
+	return true
+}
+
+// doReinstall 执行重新安装（版本不匹配时），返回是否成功
+func doReinstall(cfg *config.Config, trayApp *tray.App) bool {
+	var inst monitor.Installer
+	if cfg.WSL.Enabled {
+		inst = wsl.NewInstaller(cfg)
+	} else {
+		inst = installer.NewInstaller(cfg)
+	}
+
+	if err := inst.Connect(); err != nil {
+		logger.Error("安装器连接失败: %v", err)
+		trayApp.SetError("install_failed", "更新失败: "+err.Error())
+		return false
+	}
+	defer inst.Close()
+
+	// 版本不匹配时跳过依赖检查
+
+	// 执行安装
+	if err := inst.Install(); err != nil {
+		logger.Error("更新失败: %v", err)
+		trayApp.SetError("install_failed", "更新失败: "+err.Error())
+		return false
+	}
+
+	logger.Info("服务端更新完成，等待重新连接...")
+	return true
 }
 
 // getDisplayName 获取显示名称
@@ -331,58 +441,4 @@ func GetExecutableDir() string {
 		return "."
 	}
 	return filepath.Dir(exe)
-}
-
-// triggerInstall 触发首次安装
-func triggerInstall(cfg *config.Config, inst monitor.Installer, trayApp *tray.App) (bool, *config.ServerConfig) {
-	trayApp.SetConnecting("正在安装服务端...")
-
-	if err := inst.Connect(); err != nil {
-		logger.Error("安装器连接失败: %v", err)
-		trayApp.SetError("install_failed", "安装失败: "+err.Error())
-		return true, nil
-	}
-	defer inst.Close()
-
-	// 检查依赖
-	if ok, msg := inst.CheckDependencies(); !ok {
-		logger.Error("依赖检查失败: %s", msg)
-		trayApp.SetError("install_failed", msg)
-		return true, nil
-	}
-
-	// 执行安装
-	if err := inst.Install(); err != nil {
-		logger.Error("安装失败: %v", err)
-		trayApp.SetError("install_failed", "安装失败: "+err.Error())
-		return true, nil
-	}
-
-	logger.Info("服务端安装完成，等待重新连接...")
-	// 返回 true 让外层循环重新连接
-	return true, nil
-}
-
-// triggerReinstall 触发重新安装（版本不匹配时）
-func triggerReinstall(cfg *config.Config, inst monitor.Installer, trayApp *tray.App) (bool, *config.ServerConfig) {
-	trayApp.SetConnecting("版本不匹配，正在更新服务端...")
-
-	if err := inst.Connect(); err != nil {
-		logger.Error("安装器连接失败: %v", err)
-		trayApp.SetError("install_failed", "更新失败: "+err.Error())
-		return true, nil
-	}
-	defer inst.Close()
-
-	// 版本不匹配时跳过依赖检查（依赖应该已经安装）
-
-	// 执行安装（会覆盖旧脚本和 Hook 配置）
-	if err := inst.Install(); err != nil {
-		logger.Error("更新失败: %v", err)
-		trayApp.SetError("install_failed", "更新失败: "+err.Error())
-		return true, nil
-	}
-
-	logger.Info("服务端更新完成，等待重新连接...")
-	return true, nil
 }
