@@ -29,11 +29,11 @@
         "info": {
           "0409": {
             "Comments": "Claude Code Status Monitor",
-            "CompanyName": "",
+            "CompanyName": "Claude Status Monitor",
             "FileDescription": "Claude Code Status Monitor",
             "FileVersion": "1.0.0",
             "InternalName": "claude-status",
-            "LegalCopyright": "",
+            "LegalCopyright": "Copyright (c) 2026 Claude Status Monitor",
             "OriginalFilename": "claude-status.exe",
             "ProductName": "Claude Status Monitor",
             "ProductVersion": "1.0.0"
