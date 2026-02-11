@@ -24,12 +24,18 @@
          <Directory Id="LocalAppDataFolder">
             <Directory Id="INSTALLDIR" Name="{{.Product}}">
 
-               <!-- Application files -->
+               <!-- Application files (per-user: must use HKCU registry KeyPath for ICE38) -->
                {{if gt (.Files.Items | len) 0}}
                <Component Id="ApplicationFiles" Guid="{{.Files.GUID}}">
                   {{range $i, $e := .Files.Items}}
                   <File Id="ApplicationFile{{$i}}" Source="{{$e}}" />
                   {{end}}
+                  <RegistryValue Root="HKCU"
+                     Key="Software\{{.Company}}\{{.Product}}"
+                     Name="installed"
+                     Type="integer" Value="1" KeyPath="yes" />
+                  <!-- ICE64: RemoveFile for custom dir in user profile -->
+                  <RemoveFile Id="RemoveInstallDir" Name="*" On="uninstall" />
                </Component>
                {{end}}
 
