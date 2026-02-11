@@ -1,4 +1,4 @@
-; Claude Status Monitor - Modern NSIS Installer Script
+﻿; Claude Status Monitor - Modern NSIS Installer Script
 ; Usage: makensis /DARCH=amd64 /DVERSION=x.y.z /DEXE_PATH=..\build\claude-status-amd64.exe claude-status.nsi
 
 !ifndef ARCH
