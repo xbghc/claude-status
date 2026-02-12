@@ -61,21 +61,18 @@ func GetLogPath() string {
 
 // Init 初始化日志文件
 func Init() error {
-	// 获取可执行文件目录
-	exePath, err := os.Executable()
-	if err != nil {
-		exePath = "."
-	}
-	exeDir := filepath.Dir(exePath)
+	// 使用 %APPDATA%/claude-status 目录存放日志
+	logDir := getLogDir()
 
 	// 日志文件路径
-	logPath := filepath.Join(exeDir, "claude-status.log")
+	logPath := filepath.Join(logDir, "claude-status.log")
 	logFilePath = logPath
 
 	// 截断日志文件，只保留最近 N 行
 	truncateLogFile(logPath, maxLogLines)
 
 	// 创建日志文件
+	var err error
 	logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
@@ -124,4 +121,19 @@ func Debug(format string, args ...interface{}) {
 	if logLogger != nil && debugMode {
 		logLogger.Printf("[DEBUG] "+format, args...)
 	}
+}
+
+// getLogDir returns the directory for log files under %APPDATA%/claude-status.
+func getLogDir() string {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "."
+		}
+		appData = filepath.Join(home, "AppData", "Roaming")
+	}
+	dir := filepath.Join(appData, "claude-status")
+	os.MkdirAll(dir, 0755)
+	return dir
 }

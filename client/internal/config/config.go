@@ -9,6 +9,35 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const appName = "claude-status"
+
+// DataDir returns the application data directory under %APPDATA%/claude-status.
+// It creates the directory if it does not exist.
+func DataDir() (string, error) {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot determine home directory: %w", err)
+		}
+		appData = filepath.Join(home, "AppData", "Roaming")
+	}
+	dir := filepath.Join(appData, appName)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("cannot create data directory: %w", err)
+	}
+	return dir, nil
+}
+
+// DefaultConfigPath returns the default config file path under the data directory.
+func DefaultConfigPath() string {
+	dir, err := DataDir()
+	if err != nil {
+		return "config.yaml" // fallback
+	}
+	return filepath.Join(dir, "config.yaml")
+}
+
 // Config 应用配置
 type Config struct {
 	Server        ServerConfig `yaml:"server"`
@@ -19,8 +48,8 @@ type Config struct {
 
 // WSLConfig WSL 配置
 type WSLConfig struct {
-	Enabled bool   `yaml:"enabled"`           // 是否使用 WSL 模式
-	Distro  string `yaml:"distro,omitempty"`  // WSL 发行版名称，空则使用默认
+	Enabled bool   `yaml:"enabled"`          // 是否使用 WSL 模式
+	Distro  string `yaml:"distro,omitempty"` // WSL 发行版名称，空则使用默认
 }
 
 // ServerConfig SSH 服务器配置
