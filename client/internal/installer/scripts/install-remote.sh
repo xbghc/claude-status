@@ -2,11 +2,20 @@
 # 远程安装脚本 - 配置 Claude Code Hooks
 # 由客户端通过 SSH 执行
 
+set -e
+
 HOOK_CMD="$HOME/.claude-status/hooks/status-hook.sh"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
-# 确保 settings.json 存在
+# 确保目录和 settings.json 存在
+mkdir -p "$(dirname "$CLAUDE_SETTINGS")"
 if [ ! -f "$CLAUDE_SETTINGS" ]; then
+    echo '{}' > "$CLAUDE_SETTINGS"
+fi
+
+# 验证 settings.json 是有效 JSON
+if ! jq empty "$CLAUDE_SETTINGS" 2>/dev/null; then
+    echo "Error: $CLAUDE_SETTINGS is not valid JSON, resetting to {}" >&2
     echo '{}' > "$CLAUDE_SETTINGS"
 fi
 

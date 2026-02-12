@@ -28,17 +28,17 @@ var installRemoteScriptTemplate string
 
 // GetStatusHookScript 返回替换版本号后的脚本
 func GetStatusHookScript() string {
-	return strings.ReplaceAll(statusHookScriptTemplate, "__VERSION__", version.Version)
+	return stripCR(strings.ReplaceAll(statusHookScriptTemplate, "__VERSION__", version.Version))
 }
 
 // GetMonitorScript 返回替换版本号后的脚本
 func GetMonitorScript() string {
-	return strings.ReplaceAll(monitorScriptTemplate, "__VERSION__", version.Version)
+	return stripCR(strings.ReplaceAll(monitorScriptTemplate, "__VERSION__", version.Version))
 }
 
 // GetInstallRemoteScript 返回替换版本号后的脚本
 func GetInstallRemoteScript() string {
-	return strings.ReplaceAll(installRemoteScriptTemplate, "__VERSION__", version.Version)
+	return stripCR(strings.ReplaceAll(installRemoteScriptTemplate, "__VERSION__", version.Version))
 }
 
 // 为保持兼容性，提供变量访问（延迟初始化）
@@ -52,6 +52,11 @@ func init() {
 	StatusHookScript = GetStatusHookScript()
 	MonitorScript = GetMonitorScript()
 	InstallRemoteScript = GetInstallRemoteScript()
+}
+
+// stripCR 去除 Windows CRLF 中的 \r，确保 shell 脚本在 Linux 上可正常执行
+func stripCR(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 // Installer 远程安装器
@@ -216,7 +221,12 @@ func (i *Installer) configureHooks() error {
 		io.WriteString(stdin, InstallRemoteScript)
 	}()
 
-	return session.Run("bash -s")
+	// 捕获 stderr 以便排查失败原因
+	output, err := session.CombinedOutput("bash -s")
+	if err != nil {
+		return fmt.Errorf("%w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // loadPrivateKey 加载私钥
