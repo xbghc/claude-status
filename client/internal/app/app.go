@@ -4,23 +4,24 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"claude-status/internal/config"
 	"claude-status/internal/installer"
 	"claude-status/internal/logger"
 	"claude-status/internal/monitor"
 	"claude-status/internal/ssh"
-	"claude-status/internal/tray"
 	"claude-status/internal/wsl"
 )
 
 // Run 运行应用
-func Run(configPath string) {
+func Run(configPath string, ui UI) {
 	// 初始化日志
 	if err := logger.Init(); err != nil {
 		// 日志初始化失败，静默继续
@@ -29,22 +30,19 @@ func Run(configPath string) {
 
 	logger.Info("Starting application...")
 
-	// 创建托盘应用
-	trayApp := tray.NewApp()
-
 	// 处理系统信号
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	// 启动托盘应用
-	trayApp.Run(func() {
+	ui.Run(func() {
 		// 托盘就绪后启动主逻辑
-		go appMain(trayApp, configPath, sigCh)
+		go appMain(ui, configPath, sigCh)
 	}, nil)
 }
 
 // appMain 应用主逻辑
-func appMain(trayApp *tray.App, configPath string, sigCh chan os.Signal) {
+func appMain(ui UI, configPath string, sigCh chan os.Signal) {
 	logger.Info("appMain started")
 
 	// 从 SSH config 加载主机列表
@@ -54,7 +52,7 @@ func appMain(trayApp *tray.App, configPath string, sigCh chan os.Signal) {
 	}
 	logger.Info("Loaded %d SSH hosts", len(servers))
 	if len(servers) > 0 {
-		trayApp.SetServers(servers)
+		ui.SetServers(servers)
 	}
 
 	// 检查配置文件是否存在
@@ -67,9 +65,9 @@ func appMain(trayApp *tray.App, configPath string, sigCh chan os.Signal) {
 		if len(servers) > 0 {
 			initialState = StateUnconfigured
 		} else {
-			trayApp.SetError("no_config", "配置文件不存在且无预设服务器")
+			ui.SetError("no_config", "配置文件不存在且无预设服务器")
 			select {
-			case <-trayApp.QuitChan():
+			case <-ui.QuitChan():
 				return
 			case <-sigCh:
 				return
@@ -84,9 +82,9 @@ func appMain(trayApp *tray.App, configPath string, sigCh chan os.Signal) {
 			if len(servers) > 0 {
 				initialState = StateUnconfigured
 			} else {
-				trayApp.SetError("no_config", "配置文件无效")
+				ui.SetError("no_config", "配置文件无效")
 				select {
-				case <-trayApp.QuitChan():
+				case <-ui.QuitChan():
 					return
 				case <-sigCh:
 					return
@@ -97,57 +95,56 @@ func appMain(trayApp *tray.App, configPath string, sigCh chan os.Signal) {
 			if cfg.Debug {
 				logger.SetDebug(true)
 			}
-			trayApp.SetStatusTimeout(cfg.StatusTimeout)
 			initialState = StateConnecting
 		}
 	}
 
 	// 启动状态机驱动的主循环
-	eventLoop(initialState, cfg, trayApp, configPath, sigCh)
+	eventLoop(initialState, cfg, ui, configPath, sigCh)
 }
 
 // eventLoop 状态机驱动的主循环
-func eventLoop(initialState State, cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) {
+func eventLoop(initialState State, cfg *config.Config, ui UI, configPath string, sigCh chan os.Signal) {
 	sm := NewStateMachine(initialState, func(change StateChange) {
 		logger.Info("State: %s -> %s (event: %s)", change.From, change.To, change.Event)
-		applyTrayState(trayApp, change, cfg)
+		applyUIState(ui, change, cfg)
 	})
 
 	// 应用初始状态的 UI
-	applyTrayState(trayApp, StateChange{To: initialState, Valid: true}, cfg)
+	applyUIState(ui, StateChange{To: initialState, Valid: true}, cfg)
 
 	for sm.Current() != StateQuitting {
 		switch sm.Current() {
 		case StateUnconfigured:
-			cfg = handleUnconfigured(sm, cfg, trayApp, configPath, sigCh)
+			cfg = handleUnconfigured(sm, cfg, ui, configPath, sigCh)
 
 		case StateConnecting:
-			handleConnecting(sm, cfg, trayApp, configPath, sigCh)
+			handleConnecting(sm, cfg, ui, configPath, sigCh)
 
 		case StateInstalling:
-			handleInstalling(sm, cfg, trayApp)
+			handleInstalling(sm, cfg, ui)
 
 		case StateReinstalling:
-			handleReinstalling(sm, cfg, trayApp)
+			handleReinstalling(sm, cfg, ui)
 
 		case StateDisconnected, StateError:
-			cfg = handleWaitForUser(sm, cfg, trayApp, configPath, sigCh)
+			cfg = handleWaitForUser(sm, cfg, ui, configPath, sigCh)
 		}
 	}
 }
 
 // handleUnconfigured 处理未配置状态，等待用户选择服务器
-func handleUnconfigured(sm *StateMachine, cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) *config.Config {
+func handleUnconfigured(sm *StateMachine, cfg *config.Config, ui UI, configPath string, sigCh chan os.Signal) *config.Config {
 	select {
-	case server := <-trayApp.ServerSelectChan():
-		newCfg := applyServerConfig(server, trayApp, configPath)
+	case server := <-ui.ServerSelectChan():
+		newCfg := applyServerConfig(server, configPath)
 		if newCfg != nil {
 			cfg = newCfg
 			sm.Transition(EventServerSelected)
 		} else {
-			trayApp.SetError("session_error", "保存配置失败")
+			ui.SetError("session_error", "保存配置失败")
 		}
-	case <-trayApp.QuitChan():
+	case <-ui.QuitChan():
 		sm.Transition(EventUserQuit)
 	case <-sigCh:
 		sm.Transition(EventUserQuit)
@@ -156,13 +153,13 @@ func handleUnconfigured(sm *StateMachine, cfg *config.Config, trayApp *tray.App,
 }
 
 // handleConnecting 处理连接状态
-func handleConnecting(sm *StateMachine, cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) {
-	result := runConnection(sm, cfg, trayApp, sigCh)
+func handleConnecting(sm *StateMachine, cfg *config.Config, ui UI, configPath string, sigCh chan os.Signal) {
+	result := runConnection(sm, cfg, ui, sigCh)
 
 	// 连接结束后，根据结果触发事件（EventConnectSuccess 已在 runConnection 内部触发）
 	switch result.Event {
 	case EventConnectFailed, EventSessionError, EventSessionClosed:
-		trayApp.SetError(result.ErrorType, result.ErrorMsg)
+		ui.SetError(result.ErrorType, result.ErrorMsg)
 		sm.Transition(result.Event)
 	case EventVersionMismatch, EventNotConfigured:
 		sm.Transition(result.Event)
@@ -170,7 +167,7 @@ func handleConnecting(sm *StateMachine, cfg *config.Config, trayApp *tray.App, c
 		sm.Transition(result.Event)
 	case EventSwitchServer:
 		if result.NewServer != nil {
-			newCfg := applyServerConfig(*result.NewServer, trayApp, configPath)
+			newCfg := applyServerConfig(*result.NewServer, configPath)
 			if newCfg != nil {
 				*cfg = *newCfg
 			}
@@ -180,8 +177,8 @@ func handleConnecting(sm *StateMachine, cfg *config.Config, trayApp *tray.App, c
 }
 
 // handleInstalling 处理安装状态
-func handleInstalling(sm *StateMachine, cfg *config.Config, trayApp *tray.App) {
-	if doInstall(cfg, trayApp) {
+func handleInstalling(sm *StateMachine, cfg *config.Config, ui UI) {
+	if doInstall(cfg, ui) {
 		sm.Transition(EventInstallSuccess)
 	} else {
 		sm.Transition(EventInstallFailed)
@@ -189,8 +186,8 @@ func handleInstalling(sm *StateMachine, cfg *config.Config, trayApp *tray.App) {
 }
 
 // handleReinstalling 处理重新安装状态
-func handleReinstalling(sm *StateMachine, cfg *config.Config, trayApp *tray.App) {
-	if doReinstall(cfg, trayApp) {
+func handleReinstalling(sm *StateMachine, cfg *config.Config, ui UI) {
+	if doReinstall(cfg, ui) {
 		sm.Transition(EventInstallSuccess)
 	} else {
 		sm.Transition(EventInstallFailed)
@@ -198,15 +195,15 @@ func handleReinstalling(sm *StateMachine, cfg *config.Config, trayApp *tray.App)
 }
 
 // handleWaitForUser 处理断开/错误状态，等待用户操作
-func handleWaitForUser(sm *StateMachine, cfg *config.Config, trayApp *tray.App, configPath string, sigCh chan os.Signal) *config.Config {
+func handleWaitForUser(sm *StateMachine, cfg *config.Config, ui UI, configPath string, sigCh chan os.Signal) *config.Config {
 	select {
-	case server := <-trayApp.ServerSelectChan():
-		newCfg := applyServerConfig(server, trayApp, configPath)
+	case server := <-ui.ServerSelectChan():
+		newCfg := applyServerConfig(server, configPath)
 		if newCfg != nil {
 			cfg = newCfg
 		}
 		sm.Transition(EventServerSelected)
-	case <-trayApp.QuitChan():
+	case <-ui.QuitChan():
 		sm.Transition(EventUserQuit)
 	case <-sigCh:
 		sm.Transition(EventUserQuit)
@@ -215,14 +212,13 @@ func handleWaitForUser(sm *StateMachine, cfg *config.Config, trayApp *tray.App, 
 }
 
 // applyServerConfig 应用服务器配置并保存
-func applyServerConfig(server config.ServerConfig, trayApp *tray.App, configPath string) *config.Config {
+func applyServerConfig(server config.ServerConfig, configPath string) *config.Config {
 	cfg := config.NewFromServer(server)
 	cfg.ApplySSHConfig()
 
 	if cfg.StatusTimeout == 0 {
 		cfg.StatusTimeout = 300
 	}
-	trayApp.SetStatusTimeout(cfg.StatusTimeout)
 
 	if configPath != "" {
 		if err := config.Save(configPath, cfg); err != nil {
@@ -235,7 +231,7 @@ func applyServerConfig(server config.ServerConfig, trayApp *tray.App, configPath
 }
 
 // runConnection 运行一次连接，返回 ConnectionResult
-func runConnection(sm *StateMachine, cfg *config.Config, trayApp *tray.App, sigCh chan os.Signal) ConnectionResult {
+func runConnection(sm *StateMachine, cfg *config.Config, ui UI, sigCh chan os.Signal) ConnectionResult {
 	logger.Info("runConnection: mode=%s, display=%s", getMode(cfg), getDisplayName(cfg))
 
 	// 创建客户端（SSH 或 WSL）
@@ -287,11 +283,13 @@ func runConnection(sm *StateMachine, cfg *config.Config, trayApp *tray.App, sigC
 	logger.Info("Session started")
 	sm.Transition(EventConnectSuccess)
 
+	statusTimeout := int64(cfg.StatusTimeout)
+
 	// 主监控循环
 	for {
 		select {
 		case statuses := <-client.StatusChan():
-			trayApp.UpdateStatus(statuses)
+			processAndUpdateStatus(ui, statuses, statusTimeout)
 
 		case err := <-client.ErrorChan():
 			errMsg := err.Error()
@@ -312,14 +310,14 @@ func runConnection(sm *StateMachine, cfg *config.Config, trayApp *tray.App, sigC
 				ErrorMsg:  "连接已断开",
 			}
 
-		case <-trayApp.QuitChan():
+		case <-ui.QuitChan():
 			return ConnectionResult{Event: EventUserQuit}
 
-		case <-trayApp.DisconnectChan():
+		case <-ui.DisconnectChan():
 			logger.Info("用户主动断开连接")
 			return ConnectionResult{Event: EventUserDisconnect}
 
-		case server := <-trayApp.ServerSelectChan():
+		case server := <-ui.ServerSelectChan():
 			return ConnectionResult{
 				Event:     EventSwitchServer,
 				NewServer: &server,
@@ -331,8 +329,54 @@ func runConnection(sm *StateMachine, cfg *config.Config, trayApp *tray.App, sigC
 	}
 }
 
+// processAndUpdateStatus 过滤状态并更新 UI
+func processAndUpdateStatus(ui UI, statuses []monitor.ProjectStatus, statusTimeout int64) {
+	now := time.Now().Unix()
+
+	// 过滤掉 stopped 状态和超时的实例
+	filtered := make([]monitor.ProjectStatus, 0, len(statuses))
+	for _, s := range statuses {
+		if s.Status == "stopped" {
+			continue
+		}
+		if statusTimeout > 0 && now-s.UpdatedAt > statusTimeout {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+
+	// 判断是否有项目在工作中
+	hasWorking := false
+	workingCount := 0
+	for _, s := range filtered {
+		if s.Status == "working" {
+			hasWorking = true
+			workingCount++
+		}
+	}
+
+	// 更新图标
+	if hasWorking {
+		ui.SetIcon("running")
+	} else {
+		ui.SetIcon("input-needed")
+	}
+
+	// 更新状态菜单项
+	if len(filtered) == 0 {
+		ui.SetStatusText("已连接 - 无活动项目")
+	} else if workingCount > 0 {
+		ui.SetStatusText(fmt.Sprintf("运行中 (%d 个项目)", workingCount))
+	} else {
+		ui.SetStatusText(fmt.Sprintf("等待输入 (%d 个项目)", len(filtered)))
+	}
+
+	// 更新悬浮窗口
+	ui.UpdatePopup(filtered)
+}
+
 // doInstall 执行首次安装，返回是否成功
-func doInstall(cfg *config.Config, trayApp *tray.App) bool {
+func doInstall(cfg *config.Config, ui UI) bool {
 	var inst monitor.Installer
 	if cfg.WSL.Enabled {
 		inst = wsl.NewInstaller(cfg)
@@ -342,7 +386,7 @@ func doInstall(cfg *config.Config, trayApp *tray.App) bool {
 
 	if err := inst.Connect(); err != nil {
 		logger.Error("安装器连接失败: %v", err)
-		trayApp.SetError("install_failed", "安装失败: "+err.Error())
+		ui.SetError("install_failed", "安装失败: "+err.Error())
 		return false
 	}
 	defer inst.Close()
@@ -350,14 +394,14 @@ func doInstall(cfg *config.Config, trayApp *tray.App) bool {
 	// 检查依赖
 	if ok, msg := inst.CheckDependencies(); !ok {
 		logger.Error("依赖检查失败: %s", msg)
-		trayApp.SetError("install_failed", msg)
+		ui.SetError("install_failed", msg)
 		return false
 	}
 
 	// 执行安装
 	if err := inst.Install(); err != nil {
 		logger.Error("安装失败: %v", err)
-		trayApp.SetError("install_failed", "安装失败: "+err.Error())
+		ui.SetError("install_failed", "安装失败: "+err.Error())
 		return false
 	}
 
@@ -366,7 +410,7 @@ func doInstall(cfg *config.Config, trayApp *tray.App) bool {
 }
 
 // doReinstall 执行重新安装（版本不匹配时），返回是否成功
-func doReinstall(cfg *config.Config, trayApp *tray.App) bool {
+func doReinstall(cfg *config.Config, ui UI) bool {
 	var inst monitor.Installer
 	if cfg.WSL.Enabled {
 		inst = wsl.NewInstaller(cfg)
@@ -376,7 +420,7 @@ func doReinstall(cfg *config.Config, trayApp *tray.App) bool {
 
 	if err := inst.Connect(); err != nil {
 		logger.Error("安装器连接失败: %v", err)
-		trayApp.SetError("install_failed", "更新失败: "+err.Error())
+		ui.SetError("install_failed", "更新失败: "+err.Error())
 		return false
 	}
 	defer inst.Close()
@@ -386,7 +430,7 @@ func doReinstall(cfg *config.Config, trayApp *tray.App) bool {
 	// 执行安装
 	if err := inst.Install(); err != nil {
 		logger.Error("更新失败: %v", err)
-		trayApp.SetError("install_failed", "更新失败: "+err.Error())
+		ui.SetError("install_failed", "更新失败: "+err.Error())
 		return false
 	}
 
