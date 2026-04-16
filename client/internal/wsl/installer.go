@@ -79,6 +79,34 @@ func (i *Installer) Install() error {
 	return nil
 }
 
+// Uninstall 执行 WSL 端卸载
+// purge=true 时额外删除 settings.json 的所有备份文件。
+func (i *Installer) Uninstall(purge bool) error {
+	if purge {
+		logger.Info("开始 WSL 卸载（purge 模式）...")
+	} else {
+		logger.Info("开始 WSL 卸载...")
+	}
+
+	bashArgs := "bash -s"
+	if purge {
+		bashArgs = "bash -s -- --purge"
+	}
+
+	cmd := fmt.Sprintf("%s << 'EOFSCRIPT'\n%s\nEOFSCRIPT", bashArgs, installer.UninstallRemoteScript)
+	output, err := i.runCommand(cmd)
+	out := strings.TrimSpace(output)
+	if err != nil {
+		return fmt.Errorf("%w (output: %s)", err, out)
+	}
+
+	if out != "" {
+		logger.Info("WSL 卸载输出:\n%s", out)
+	}
+	logger.Info("WSL 卸载完成")
+	return nil
+}
+
 // runCommand 执行 WSL 命令
 func (i *Installer) runCommand(command string) (string, error) {
 	args := []string{}

@@ -26,6 +26,9 @@ var monitorScriptTemplate string
 //go:embed scripts/install-remote.sh
 var installRemoteScriptTemplate string
 
+//go:embed scripts/uninstall-remote.sh
+var uninstallRemoteScriptTemplate string
+
 // GetStatusHookScript 返回替换版本号后的脚本
 func GetStatusHookScript() string {
 	return stripCR(strings.ReplaceAll(statusHookScriptTemplate, "__VERSION__", version.Version))
@@ -41,17 +44,24 @@ func GetInstallRemoteScript() string {
 	return stripCR(strings.ReplaceAll(installRemoteScriptTemplate, "__VERSION__", version.Version))
 }
 
+// GetUninstallRemoteScript 返回替换版本号后的卸载脚本
+func GetUninstallRemoteScript() string {
+	return stripCR(strings.ReplaceAll(uninstallRemoteScriptTemplate, "__VERSION__", version.Version))
+}
+
 // 为保持兼容性，提供变量访问（延迟初始化）
 var (
-	StatusHookScript    = ""
-	MonitorScript       = ""
-	InstallRemoteScript = ""
+	StatusHookScript      = ""
+	MonitorScript         = ""
+	InstallRemoteScript   = ""
+	UninstallRemoteScript = ""
 )
 
 func init() {
 	StatusHookScript = GetStatusHookScript()
 	MonitorScript = GetMonitorScript()
 	InstallRemoteScript = GetInstallRemoteScript()
+	UninstallRemoteScript = GetUninstallRemoteScript()
 }
 
 // stripCR 去除 Windows CRLF 中的 \r，确保 shell 脚本在 Linux 上可正常执行
@@ -164,6 +174,49 @@ func (i *Installer) Install() error {
 	}
 
 	logger.Info("远程安装完成")
+	return nil
+}
+
+// Uninstall 执行远程卸载：清理 Hook 配置并删除脚本/状态目录
+// purge=true 时额外删除 settings.json 的所有备份文件。
+func (i *Installer) Uninstall(purge bool) error {
+	if purge {
+		logger.Info("开始远程卸载（purge 模式）...")
+	} else {
+		logger.Info("开始远程卸载...")
+	}
+
+	session, err := i.client.NewSession()
+	if err != nil {
+		return fmt.Errorf("创建会话失败: %w", err)
+	}
+	defer session.Close()
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("获取 stdin 失败: %w", err)
+	}
+
+	go func() {
+		defer stdin.Close()
+		io.WriteString(stdin, UninstallRemoteScript)
+	}()
+
+	cmd := "bash -s"
+	if purge {
+		cmd = "bash -s -- --purge"
+	}
+
+	output, err := session.CombinedOutput(cmd)
+	out := strings.TrimSpace(string(output))
+	if err != nil {
+		return fmt.Errorf("%w (output: %s)", err, out)
+	}
+
+	if out != "" {
+		logger.Info("远程卸载输出:\n%s", out)
+	}
+	logger.Info("远程卸载完成")
 	return nil
 }
 

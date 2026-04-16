@@ -40,4 +40,7 @@ type Installer interface {
 	Close()
 	CheckDependencies() (bool, string)
 	Install() error
+	// Uninstall 执行服务端卸载。purge=true 时额外清理 settings.json 备份
+	// 以及我们安装时创建的空 settings.json（彻底不留痕迹）。
+	Uninstall(purge bool) error
 }
