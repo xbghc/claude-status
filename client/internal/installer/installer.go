@@ -178,8 +178,13 @@ func (i *Installer) Install() error {
 }
 
 // Uninstall 执行远程卸载：清理 Hook 配置并删除脚本/状态目录
-func (i *Installer) Uninstall() error {
-	logger.Info("开始远程卸载...")
+// purge=true 时额外删除 settings.json 的所有备份文件。
+func (i *Installer) Uninstall(purge bool) error {
+	if purge {
+		logger.Info("开始远程卸载（purge 模式）...")
+	} else {
+		logger.Info("开始远程卸载...")
+	}
 
 	session, err := i.client.NewSession()
 	if err != nil {
@@ -197,7 +202,12 @@ func (i *Installer) Uninstall() error {
 		io.WriteString(stdin, UninstallRemoteScript)
 	}()
 
-	output, err := session.CombinedOutput("bash -s")
+	cmd := "bash -s"
+	if purge {
+		cmd = "bash -s -- --purge"
+	}
+
+	output, err := session.CombinedOutput(cmd)
 	out := strings.TrimSpace(string(output))
 	if err != nil {
 		return fmt.Errorf("%w (output: %s)", err, out)

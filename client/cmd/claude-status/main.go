@@ -17,6 +17,7 @@ import (
 var (
 	configPath   = flag.String("config", "", "配置文件路径")
 	uninstallCmd = flag.Bool("uninstall", false, "卸载服务器上的脚本和 Hook 配置后退出")
+	purgeCmd     = flag.Bool("purge", false, "搭配 --uninstall 使用，额外删除 settings.json 备份以彻底清理")
 )
 
 func main() {
@@ -26,8 +27,8 @@ func main() {
 		cp = config.DefaultConfigPath()
 	}
 
-	if *uninstallCmd {
-		runUninstallFlow(cp)
+	if *uninstallCmd || *purgeCmd {
+		runUninstallFlow(cp, *purgeCmd)
 		return
 	}
 
@@ -39,10 +40,10 @@ func main() {
 //   - 尝试附加父进程控制台，便于在 PowerShell/CMD 中看到日志
 //   - 执行服务端卸载
 //   - 通过 MessageBox 给出结果反馈（双击运行时也能看到结果）
-func runUninstallFlow(configPath string) {
+func runUninstallFlow(configPath string, purge bool) {
 	attachParentConsole()
 
-	err := app.RunUninstall(configPath)
+	err := app.RunUninstall(configPath, purge)
 	if err != nil {
 		msg := "卸载失败: " + err.Error()
 		fmt.Fprintln(os.Stderr, msg)
@@ -50,7 +51,12 @@ func runUninstallFlow(configPath string) {
 		os.Exit(1)
 	}
 
-	msg := "服务端卸载完成\n\n已移除 ~/.claude/settings.json 中的 status-hook\n已删除 ~/.claude-status 目录"
+	var msg string
+	if purge {
+		msg = "服务端已彻底清理\n\n- 已移除 settings.json 中的 status-hook\n- 已删除 ~/.claude-status 目录\n- 已删除所有 settings.json.backup.* 备份\n- 若 settings.json 已为空也已删除"
+	} else {
+		msg = "服务端卸载完成\n\n- 已移除 settings.json 中的 status-hook\n- 已删除 ~/.claude-status 目录\n- 原 settings.json 已备份为 settings.json.backup.uninstall.*\n\n如需彻底清理备份，请使用 --uninstall --purge"
+	}
 	fmt.Println("服务端卸载完成")
 	showMessageBox("Claude Status 卸载", msg, false)
 }
