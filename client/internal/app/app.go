@@ -260,6 +260,16 @@ func runConnection(sm *StateMachine, cfg *config.Config, ui UI, sigCh chan os.Si
 		logger.Error("Start failed: %v", err)
 		errMsg := err.Error()
 
+		// 检测是否是版本检查超时（不自动重装，交由用户决定）
+		if errors.Is(err, ssh.ErrVersionCheckTimeout) || errors.Is(err, wsl.ErrVersionCheckTimeout) {
+			logger.Info("版本检查超时，作为连接失败处理")
+			return ConnectionResult{
+				Event:     EventConnectFailed,
+				ErrorType: "version_check_timeout",
+				ErrorMsg:  "版本检查超时，请检查网络或稍后重试",
+			}
+		}
+
 		// 检测是否是版本不匹配
 		if errors.Is(err, ssh.ErrVersionMismatch) || errors.Is(err, wsl.ErrVersionMismatch) {
 			logger.Info("版本不匹配，触发重新安装...")

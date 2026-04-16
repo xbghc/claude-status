@@ -20,6 +20,9 @@ import (
 // ErrVersionMismatch 版本不匹配错误
 var ErrVersionMismatch = errors.New("version mismatch")
 
+// ErrVersionCheckTimeout 版本检查超时（未在规定时间内收到服务端 version 消息）
+var ErrVersionCheckTimeout = errors.New("version check timeout")
+
 // Client SSH 客户端
 type Client struct {
 	config    *config.Config
@@ -141,9 +144,11 @@ func (c *Client) Start() error {
 			return ErrVersionMismatch
 		}
 	case <-time.After(5 * time.Second):
-		// 超时，假设是旧版本脚本（不输出版本信息）
-		logger.Info("版本检查超时，可能是旧版本脚本")
-		return ErrVersionMismatch
+		// 超时：未在 5 秒内收到服务端 version 消息。
+		// 常见原因：网络延迟、SSH 会话启动慢、或远端脚本卡住。
+		// 不做自动重装，交由上层处理并提示用户。
+		logger.Info("版本检查超时，未收到服务端版本消息")
+		return ErrVersionCheckTimeout
 	}
 
 	return nil
