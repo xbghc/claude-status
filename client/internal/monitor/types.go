@@ -40,4 +40,5 @@ type Installer interface {
 	Close()
 	CheckDependencies() (bool, string)
 	Install() error
+	Uninstall() error
 }

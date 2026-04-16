@@ -153,6 +153,24 @@ make all      # 编译
 
 日志位置：程序同目录下 `claude-status.log`
 
+## 卸载
+
+### 客户端
+正常 Windows 卸载（MSI 或删除 exe）即可。
+
+### 服务端（脚本 + Hook）
+
+使用客户端一键卸载（推荐）：
+
+```powershell
+claude-status.exe --uninstall
+```
+
+该命令会连接配置中的服务器（SSH 或 WSL），执行：
+- 从 `~/.claude/settings.json` 移除所有 `status-hook.sh` 相关的 Hook
+- 删除 `~/.claude-status/` 目录（脚本 + 状态文件）
+- 先备份原 `settings.json` 为 `settings.json.backup.uninstall.*`
+
 ---
 
 <div align="center">

@@ -79,6 +79,24 @@ func (i *Installer) Install() error {
 	return nil
 }
 
+// Uninstall 执行 WSL 端卸载
+func (i *Installer) Uninstall() error {
+	logger.Info("开始 WSL 卸载...")
+
+	cmd := fmt.Sprintf("bash -s << 'EOFSCRIPT'\n%s\nEOFSCRIPT", installer.UninstallRemoteScript)
+	output, err := i.runCommand(cmd)
+	out := strings.TrimSpace(output)
+	if err != nil {
+		return fmt.Errorf("%w (output: %s)", err, out)
+	}
+
+	if out != "" {
+		logger.Info("WSL 卸载输出:\n%s", out)
+	}
+	logger.Info("WSL 卸载完成")
+	return nil
+}
+
 // runCommand 执行 WSL 命令
 func (i *Installer) runCommand(command string) (string, error) {
 	args := []string{}
