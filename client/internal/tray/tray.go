@@ -667,6 +667,8 @@ func (t *App) SetError(errType string, msg string) {
 		statusMsg = "会话错误"
 	case "no_config":
 		statusMsg = "未配置"
+	case "version_check_timeout":
+		statusMsg = "版本检查超时"
 	default:
 		statusMsg = msg
 	}
